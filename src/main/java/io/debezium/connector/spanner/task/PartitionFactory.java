@@ -86,22 +86,34 @@ public class PartitionFactory {
     }
 
     private Timestamp resolveOffset(PartitionState partitionState, Timestamp offset) {
-        Timestamp startTime;
+        Timestamp startTimestamp = partitionState.getStartTimestamp();
+        Timestamp processedTimestamp = partitionState.getProcessedTimestamp();
+
+        Timestamp candidate = null;
+
+        if (processedTimestamp != null && processedTimestamp.compareTo(startTimestamp) > 0) {
+            candidate = processedTimestamp;
+        }
 
         if (offset != null) {
-            if (offset.toSqlTimestamp().before(partitionState.getStartTimestamp().toSqlTimestamp())) {
-                LOGGER.warn("Incorrect offset {}, start time will be taken for partition {}", offset, partitionState.getToken());
-                startTime = partitionState.getStartTimestamp();
+            if (offset.compareTo(startTimestamp) < 0) {
+                LOGGER.warn("Incorrect offset {}, ignoring for partition {}", offset, partitionState.getToken());
             }
-            else {
-                LOGGER.info("Found previous offset {}", Map.of(partitionState.getToken(), offset.toString()));
-                startTime = offset;
+            else if (candidate == null || offset.compareTo(candidate) > 0) {
+                candidate = offset;
             }
         }
+
+        Timestamp startTime;
+        if (candidate != null) {
+            LOGGER.info("Resuming partition {} from {} (processedTimestamp={}, offset={})",
+                    partitionState.getToken(), candidate, processedTimestamp, offset);
+            startTime = candidate;
+        }
         else {
-            LOGGER.info("Previous offset not found, start time will be taken {}",
-                    Map.of(partitionState.getToken(), partitionState.getStartTimestamp()));
-            startTime = partitionState.getStartTimestamp();
+            LOGGER.info("No previous offset found, using startTimestamp {} for partition {}",
+                    startTimestamp, partitionState.getToken());
+            startTime = startTimestamp;
         }
 
         metricsEventPublisher.publishMetricEvent(PartitionOffsetLagMetricEvent.from(partitionState.getToken(), startTime));

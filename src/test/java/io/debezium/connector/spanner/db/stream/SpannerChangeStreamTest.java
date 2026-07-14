@@ -180,6 +180,10 @@ class SpannerChangeStreamTest {
                     public boolean onStuckPartition(String token) {
                         return false;
                     }
+
+                    @Override
+                    public void onWindowAdvanced(Partition partition, Timestamp windowEnd) {
+                    }
                 });
 
             }

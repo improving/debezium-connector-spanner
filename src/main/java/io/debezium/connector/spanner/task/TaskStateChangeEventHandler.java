@@ -23,13 +23,17 @@ import io.debezium.connector.spanner.task.operation.ChildPartitionOperation;
 import io.debezium.connector.spanner.task.operation.ClearSharedPartitionOperation;
 import io.debezium.connector.spanner.task.operation.ConnectorEndDetectionOperation;
 import io.debezium.connector.spanner.task.operation.FindPartitionForStreamingOperation;
+import io.debezium.connector.spanner.task.operation.MoveOutStateUpdateOperation;
 import io.debezium.connector.spanner.task.operation.Operation;
 import io.debezium.connector.spanner.task.operation.PartitionStatusUpdateOperation;
+import io.debezium.connector.spanner.task.operation.ProcessedTimestampUpdateOperation;
 import io.debezium.connector.spanner.task.operation.RemoveFinishedPartitionOperation;
 import io.debezium.connector.spanner.task.operation.TakePartitionForStreamingOperation;
 import io.debezium.connector.spanner.task.operation.TakeSharedPartitionOperation;
+import io.debezium.connector.spanner.task.state.MoveOutNotificationEvent;
 import io.debezium.connector.spanner.task.state.NewPartitionsEvent;
 import io.debezium.connector.spanner.task.state.PartitionStatusUpdateEvent;
+import io.debezium.connector.spanner.task.state.ProcessedTimestampUpdateEvent;
 import io.debezium.connector.spanner.task.state.SyncEvent;
 import io.debezium.connector.spanner.task.state.TaskStateChangeEvent;
 
@@ -89,6 +93,12 @@ public class TaskStateChangeEventHandler {
             processSyncEvent();
 
         }
+        else if (syncEvent instanceof MoveOutNotificationEvent) {
+            processEvent((MoveOutNotificationEvent) syncEvent);
+        }
+        else if (syncEvent instanceof ProcessedTimestampUpdateEvent) {
+            processEvent((ProcessedTimestampUpdateEvent) syncEvent);
+        }
         else {
             throw new IllegalStateException("Unknown event");
         }
@@ -114,6 +124,16 @@ public class TaskStateChangeEventHandler {
                 new FindPartitionForStreamingOperation(),
                 new TakePartitionForStreamingOperation(changeStream, partitionFactory),
                 new RemoveFinishedPartitionOperation(spannerEventDispatcher, connectorConfig));
+    }
+
+    private void processEvent(MoveOutNotificationEvent event) throws InterruptedException {
+        performOperation(new MoveOutStateUpdateOperation(
+                event.getToken(), event.getCommitTimestamp(), event.getDestinationTokens()));
+    }
+
+    private void processEvent(ProcessedTimestampUpdateEvent event) throws InterruptedException {
+        performOperation(new ProcessedTimestampUpdateOperation(
+                event.getToken(), event.getProcessedTimestamp()));
     }
 
     private void processSyncEvent() throws InterruptedException {

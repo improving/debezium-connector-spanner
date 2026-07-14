@@ -31,6 +31,17 @@ message TaskState {
   repeated PartitionState sharedPartitions = 6;
 }
 
+message MoveInState {
+  int64 timestamp = 1;
+  string record_sequence = 2;
+  repeated string sourcePartitionTokens = 3;
+}
+
+message MoveOutState {
+  int64 timestamp = 1;
+  repeated string destPartitionTokens = 2;
+}
+
 message PartitionState {
   string token = 1;
   string startTimestamp = 2;
@@ -44,6 +55,11 @@ message PartitionState {
   string finishedTimestamp = 7;
 
   string originParent = 8;
+
+  MoveInState moveInState = 9;
+  MoveOutState moveOutState = 10;
+
+  string processedTimestamp = 11;
 }
 
 enum State {

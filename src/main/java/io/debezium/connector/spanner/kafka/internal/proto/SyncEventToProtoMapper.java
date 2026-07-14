@@ -10,6 +10,8 @@ import static java.util.stream.Collectors.toList;
 import java.util.List;
 
 import io.debezium.connector.spanner.kafka.event.proto.SyncEventProtos;
+import io.debezium.connector.spanner.kafka.internal.model.MoveInState;
+import io.debezium.connector.spanner.kafka.internal.model.MoveOutState;
 import io.debezium.connector.spanner.kafka.internal.model.PartitionState;
 import io.debezium.connector.spanner.kafka.internal.model.TaskSyncEvent;
 
@@ -76,6 +78,27 @@ public class SyncEventToProtoMapper {
 
         if (partitionState.getFinishedTimestamp() != null) {
             builder.setFinishedTimestamp(partitionState.getFinishedTimestamp().toString());
+        }
+
+        MoveOutState moveOutState = partitionState.getMoveOutState();
+        if (moveOutState != null) {
+            SyncEventProtos.MoveOutState.Builder moveOutBuilder = SyncEventProtos.MoveOutState.newBuilder()
+                    .setTimestamp(moveOutState.getTimestamp().toProto().getSeconds())
+                    .addAllDestPartitionTokens(moveOutState.getDestPartitionTokens());
+            builder.setMoveOutState(moveOutBuilder.build());
+        }
+
+        MoveInState moveInState = partitionState.getMoveInState();
+        if (moveInState != null) {
+            SyncEventProtos.MoveInState.Builder moveInBuilder = SyncEventProtos.MoveInState.newBuilder()
+                    .setTimestamp(moveInState.getTimestamp().toProto().getSeconds())
+                    .setRecordSequence(moveInState.getRecordSequence() != null ? moveInState.getRecordSequence() : "")
+                    .addAllSourcePartitionTokens(moveInState.getSourcePartitionTokens());
+            builder.setMoveInState(moveInBuilder.build());
+        }
+
+        if (partitionState.getProcessedTimestamp() != null) {
+            builder.setProcessedTimestamp(partitionState.getProcessedTimestamp().toString());
         }
 
         return builder.build();
