@@ -6,6 +6,7 @@
 package io.debezium.connector.spanner;
 
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 
 import io.debezium.config.Configuration;
@@ -13,6 +14,7 @@ import io.debezium.connector.spanner.config.BaseSpannerConnectorConfig;
 import io.debezium.connector.spanner.util.Connection;
 import io.debezium.connector.spanner.util.Database;
 import io.debezium.connector.spanner.util.KafkaEnvironment;
+import io.debezium.connector.spanner.util.PartitionMode;
 import io.debezium.embedded.async.AbstractAsyncEngineConnectorTest;
 import io.debezium.util.Testing;
 
@@ -93,5 +95,14 @@ public class AbstractSpannerConnectorIT extends AbstractAsyncEngineConnectorTest
     protected String getTopicName(Configuration config, String tableName) {
         String debeziumConnectorName = "testing-connector";
         return debeziumConnectorName + "." + tableName;
+    }
+
+    protected void assumeSupportedPartitionMode(PartitionMode partitionMode) {
+        boolean unsupported = partitionMode == PartitionMode.MUTABLE_KEY_RANGE && !Database.isSpannerOmniEndpoint();
+        Assumptions.assumeFalse(unsupported,
+                () -> partitionMode + " is not yet supported here: the local Docker Spanner emulator's DDL parser "
+                        + "rejects partition_mode outright, so a MUTABLE_KEY_RANGE stream can't be created against "
+                        + "it at all - re-run with -Dspanner.type=OMNI -Dgcp.spanner.host=<host:port> "
+                        + "-Dspanner.omni.use.plaintext=true against a running Spanner Omni instance instead");
     }
 }

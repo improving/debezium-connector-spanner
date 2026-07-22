@@ -191,6 +191,83 @@ public class Connection {
         await().atMost(Duration.ofSeconds(60)).until(() -> isStreamExist(changeStreamName));
     }
 
+    public void createChangeStreamNewRowAndOldValues(String changeStreamName, String... tables)
+            throws ExecutionException, InterruptedException {
+        this.updateDDL(List.of("create change stream " + changeStreamName + " for " +
+                (tables.length == 0 ? "ALL" : String.join(",", tables)) +
+                " OPTIONS (\n" +
+                "            value_capture_type = 'NEW_ROW_AND_OLD_VALUES'\n" +
+                "        ) "));
+        await().atMost(Duration.ofSeconds(60)).until(() -> isStreamExist(changeStreamName));
+    }
+
+    public void createChangeStreamExcludeDelete(String changeStreamName, String... tables) throws ExecutionException,
+            InterruptedException {
+        this.updateDDL(List.of("create change stream " + changeStreamName + " for " +
+                (tables.length == 0 ? "ALL" : String.join(",", tables)) +
+                " OPTIONS (\n" +
+                "            exclude_delete = true\n" +
+                "        ) "));
+        await().atMost(Duration.ofSeconds(60)).until(() -> isStreamExist(changeStreamName));
+    }
+
+    public void createChangeStreamExcludeInsert(String changeStreamName, String... tables) throws ExecutionException,
+            InterruptedException {
+        this.updateDDL(List.of("create change stream " + changeStreamName + " for " +
+                (tables.length == 0 ? "ALL" : String.join(",", tables)) +
+                " OPTIONS (\n" +
+                "            exclude_insert = true\n" +
+                "        ) "));
+        await().atMost(Duration.ofSeconds(60)).until(() -> isStreamExist(changeStreamName));
+    }
+
+    public void createChangeStreamExcludeUpdate(String changeStreamName, String... tables) throws ExecutionException,
+            InterruptedException {
+        this.updateDDL(List.of("create change stream " + changeStreamName + " for " +
+                (tables.length == 0 ? "ALL" : String.join(",", tables)) +
+                " OPTIONS (\n" +
+                "            exclude_update = true\n" +
+                "        ) "));
+        await().atMost(Duration.ofSeconds(60)).until(() -> isStreamExist(changeStreamName));
+    }
+
+    public void createChangeStreamAllowTxnExclusion(String changeStreamName, String... tables)
+            throws ExecutionException, InterruptedException {
+        this.updateDDL(List.of("create change stream " + changeStreamName + " for " +
+                (tables.length == 0 ? "ALL" : String.join(",", tables)) +
+                " OPTIONS (\n" +
+                "            allow_txn_exclusion = true\n" +
+                "        ) "));
+        await().atMost(Duration.ofSeconds(60)).until(() -> isStreamExist(changeStreamName));
+    }
+
+    public void createChangeStreamExcludeTtlDeletes(String changeStreamName, String... tables)
+            throws ExecutionException, InterruptedException {
+        this.updateDDL(List.of("create change stream " + changeStreamName + " for " +
+                (tables.length == 0 ? "ALL" : String.join(",", tables)) +
+                " OPTIONS (\n" +
+                "            exclude_ttl_deletes = true\n" +
+                "        ) "));
+        await().atMost(Duration.ofSeconds(60)).until(() -> isStreamExist(changeStreamName));
+    }
+
+    public void createChangeStream(String changeStreamName, PartitionMode partitionMode, String... tables)
+            throws ExecutionException, InterruptedException {
+        if (partitionMode == PartitionMode.IMMUTABLE_KEY_RANGE) {
+            // The Spanner emulator's DDL parser rejects the partition_mode option
+            // entirely ("Option: partition_mode is unknown"), even when the value
+            // requested is the documented default. Since IMMUTABLE_KEY_RANGE is that
+            // default, falling back to the plain DDL is equivalent and actually works
+            // against the emulator.
+            this.createChangeStream(changeStreamName, tables);
+            return;
+        }
+        this.updateDDL(List.of("create change stream " + changeStreamName + " for " +
+                (tables.length == 0 ? "ALL" : String.join(",", tables)) +
+                " OPTIONS ( partition_mode = '" + partitionMode.name() + "' )"));
+        await().atMost(Duration.ofSeconds(60)).until(() -> isStreamExist(changeStreamName));
+    }
+
     private String createInstance() {
         if (isSpannerOmniEndpoint()) {
             return DatabaseClientFactory.SPANNER_OMNI_DEFAULT_ID;
