@@ -49,7 +49,45 @@ exists before doing this.
 7. Record the `<instance-id>` value — this becomes the `gcp.spanner.instance.id`
    system property used below. `gcp.spanner.project.id` is always `improvingvancouver`.
 
-## 2. Authenticate locally via impersonation
+## 2. Provision instance partitions for geo-partitioned placement tests (skip if not needed)
+
+Only needed for `PlacementKeyMoveIT`, `InterleavedPlacementMoveIT`, and
+`CascadingDeleteDuringPlacementMoveIT`.
+
+These three tests expect two pre-provisioned instance partitions named
+`east-partition` and `west-partition` to already exist - `Connection.createPlacement(...)`
+maps a `PLACEMENT` onto an existing instance partition by name, it does not
+create the instance partition itself.
+
+Each instance partition needs its own distinct base config - Spanner
+rejects creating one that shares a config with another instance partition
+on the same instance, including the instance's own default partition:
+
+```bash
+gcloud spanner instance-partitions create east-partition \
+  --instance=<instance-id> --project=improvingvancouver \
+  --config=nam3 --nodes=1 --description="east-placement-testing"
+
+gcloud spanner instance-partitions create west-partition \
+  --instance=<instance-id> --project=improvingvancouver \
+  --config=nam7 --nodes=1 --description="west-placement-testing"
+```
+
+Verify:
+```bash
+gcloud spanner instance-partitions list --instance=<instance-id> --project=improvingvancouver
+# expect east-partition and west-partition, both state: READY
+```
+
+These are standing, billed resources (1 node each) that persist until
+deleted - not a one-off probe. Tear them down along with the instance itself
+when you're finished testing against real-Spanner:
+```bash
+gcloud spanner instance-partitions delete east-partition --instance=<instance-id> --project=improvingvancouver
+gcloud spanner instance-partitions delete west-partition --instance=<instance-id> --project=improvingvancouver
+```
+
+## 3. Authenticate locally via impersonation
 
 No key files. Populate local Application Default Credentials (ADC) by
 impersonating the service account. This requires a `roles/iam.serviceAccountTokenCreator`
@@ -75,7 +113,7 @@ its contents as the connector's `gcp.spanner.credentials.json` config value:
 export GOOGLE_APPLICATION_CREDENTIALS="$(gcloud info --format='value(config.paths.global_config_dir)')/application_default_credentials.json"
 ```
 
-## 3. Run the tests
+## 4. Run the tests
 
 From `debezium-connector-spanner`:
 
@@ -97,7 +135,7 @@ Notes:
 - Default `mvn verify` (no `-Preal-spanner`) is unaffected and still runs
   against the emulator.
 
-## 4. Clean up leaked databases (only if a run was killed/crashed)
+## 5. Clean up leaked databases (only if a run was killed/crashed)
 
 `Connection.connect()` normally drops its per-run database via a JVM
 shutdown hook on graceful exit. A hard-killed run (e.g. `kill -9`, IDE force
@@ -109,9 +147,11 @@ gcloud spanner databases list --instance=<instance-id> --project=improvingvancou
 gcloud spanner databases delete <leaked-database-id> --instance=<instance-id> --project=improvingvancouver
 ```
 
-## 5. Tear down the instance 
+## 6. Tear down the instance 
 
-The instance is persistent and shared across runs/people — to save costs, tear it down at night:
+The instance is persistent and shared across runs/people — to save costs, tear it down at night.
+Deleting the instance also deletes `east-partition`/`west-partition` along with it, so there's no
+separate cleanup step needed for those if you're tearing down the whole instance:
 
 ```bash
 gcloud spanner instances delete <instance-id> --project=improvingvancouver
