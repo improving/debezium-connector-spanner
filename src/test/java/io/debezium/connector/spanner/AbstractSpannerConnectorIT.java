@@ -16,6 +16,7 @@ import java.util.regex.Pattern;
 
 import org.apache.kafka.connect.source.SourceConnector;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 
 import io.debezium.config.Configuration;

@@ -18,7 +18,9 @@ import java.util.concurrent.TimeUnit;
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.source.SourceRecord;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import io.debezium.config.Configuration;
@@ -28,6 +30,9 @@ public class DataTypesIT extends AbstractSpannerConnectorIT {
 
     private static final String gsqlTableName = "g_embedded_data_types_tests_table";
     private static final String gsqlChangeStreamName = "g_embeddedDataTypesTestChangeStream";
+
+    private static final String edgeCasesTableName = "embedded_data_type_edge_cases_table";
+    private static final String edgeCasesChangeStreamName = "embeddedDataTypeEdgeCasesStream";
 
     @BeforeAll
     static void setup() throws InterruptedException, ExecutionException {
@@ -48,6 +53,11 @@ public class DataTypesIT extends AbstractSpannerConnectorIT {
                 + ") PRIMARY KEY (id)");
         databaseConnection.createChangeStream(gsqlChangeStreamName, gsqlTableName);
 
+        databaseConnection.createTable(edgeCasesTableName
+                + "(id INT64, description STRING(100), tag_bytes BYTES(100), balance NUMERIC, "
+                + "unicode_name STRING(100), tags ARRAY<STRING(50)>) PRIMARY KEY (id)");
+        databaseConnection.createChangeStream(edgeCasesChangeStreamName, edgeCasesTableName);
+
         Testing.print("DataTypesIT is ready...");
     }
 
@@ -55,6 +65,20 @@ public class DataTypesIT extends AbstractSpannerConnectorIT {
     static void clear() throws InterruptedException {
         databaseConnection.dropChangeStream(gsqlChangeStreamName);
         databaseConnection.dropTable(gsqlTableName);
+
+        databaseConnection.dropChangeStream(edgeCasesChangeStreamName);
+        databaseConnection.dropTable(edgeCasesTableName);
+    }
+
+    @BeforeEach
+    void clearTopics() {
+        clearKafkaTopics();
+    }
+
+    @AfterEach
+    void ensureConnectorStopped() throws InterruptedException {
+        stopConnector();
+        assertConnectorNotRunning();
     }
 
     @Test
@@ -121,8 +145,81 @@ public class DataTypesIT extends AbstractSpannerConnectorIT {
         assertThat(values.getString("jsoncol")).isEqualTo("\"Hello\"");
         assertThat(values.getArray("arrcol")).containsExactly("a", "b");
         assertThat(values.getString("tokenlistcol")).isNull();
+    }
 
-        stopConnector();
-        assertConnectorNotRunning();
+    /**
+     * Covers additional data-type edge cases
+     * empty string vs. {@code NULL}, empty {@code BYTES}, large/negative
+     * {@code NUMERIC}, unicode content, and empty arrays - all on the insert path, plus an
+     * update and delete to check these values survive beyond just being captured on
+     * creation.
+     */
+    @Test
+    public void shouldRoundTripEdgeCaseValuesAcrossInsertUpdateDelete() throws InterruptedException, ExecutionException {
+        final Configuration config = Configuration.copy(baseConfig)
+                .with("gcp.spanner.change.stream", edgeCasesChangeStreamName)
+                .with("name", edgeCasesTableName + "_test")
+                .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()))
+                .build();
+
+        initializeConnectorTestFramework();
+        start(SpannerConnector.class, config);
+        assertConnectorIsRunning();
+
+        databaseConnection.executeUpdate(
+                "INSERT INTO " + edgeCasesTableName + "(id, description, tag_bytes, balance, unicode_name, tags) VALUES ("
+                        + "1, "
+                        + "'', " // empty string, not NULL
+                        + "b'', " // empty bytes, not NULL
+                        + "-123.456789, " // negative numeric
+                        + "'日本語 café ☕', " // unicode content
+                        + "[])"); // empty array, not NULL
+
+        databaseConnection.executeUpdate(
+                "UPDATE " + edgeCasesTableName + " SET description = NULL, tag_bytes = b'payload', "
+                        + "balance = 99999999999999999999.999999999, "
+                        + "unicode_name = '北京 🎉', tags = ['a', 'b'] WHERE id = 1");
+
+        databaseConnection.executeUpdate(
+                "DELETE FROM " + edgeCasesTableName + " WHERE id = 1");
+
+        assertTrue(waitForAvailableRecords(waitTimeForRecords(), TimeUnit.SECONDS));
+        SourceRecords sourceRecords = consumeRecordsByTopic(10, false);
+        List<SourceRecord> records = sourceRecords.recordsForTopic(getTopicName(config, edgeCasesTableName));
+        // insert + update + delete + tombstone
+        assertThat(records).hasSize(4);
+
+        Struct insertAfter = ((Struct) records.get(0).value()).getStruct("after");
+        // Empty string and empty bytes must round-trip as empty, not NULL.
+        assertThat(insertAfter.getString("description")).isEqualTo("");
+        assertThat(insertAfter.getBytes("tag_bytes")).isEqualTo(new byte[0]);
+        assertThat(insertAfter.getString("balance")).isEqualTo("-123.456789");
+        assertThat(insertAfter.getString("unicode_name")).isEqualTo("日本語 café ☕");
+        assertThat(insertAfter.getArray("tags")).isEmpty();
+
+        Struct updateRecord = (Struct) records.get(1).value();
+        Struct updateBefore = updateRecord.getStruct("before");
+        Struct updateAfter = updateRecord.getStruct("after");
+
+        // Before reflects the original edge-case values.
+        assertThat(updateBefore.getString("description")).isEqualTo("");
+        assertThat(updateBefore.getArray("tags")).isEmpty();
+
+        // After reflects the new values, including the empty-string-to-NULL transition
+        // and a large positive NUMERIC replacing a negative one.
+        assertThat(updateAfter.getString("description")).isNull();
+        assertThat(updateAfter.getBytes("tag_bytes")).isEqualTo("payload".getBytes());
+        assertThat(updateAfter.getString("balance")).isEqualTo("99999999999999999999.999999999");
+        assertThat(updateAfter.getString("unicode_name")).isEqualTo("北京 🎉");
+        assertThat(updateAfter.getArray("tags")).containsExactly("a", "b");
+
+        Struct deleteBefore = ((Struct) records.get(2).value()).getStruct("before");
+        // The delete's "before" must reflect the updated state, matching the same
+        // pattern established in DeleteEventIT - not the original insert-time values.
+        assertThat(deleteBefore.getString("unicode_name")).isEqualTo("北京 🎉");
+        assertThat(deleteBefore.getArray("tags")).containsExactly("a", "b");
+
+        // Tombstone.
+        assertThat(records.get(3).value()).isNull();
     }
 }
