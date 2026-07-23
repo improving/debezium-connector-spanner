@@ -21,12 +21,11 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.stream.Stream;
 
+import org.apache.kafka.common.config.ConfigDef;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
-
-import org.apache.kafka.common.config.ConfigDef;
-import org.junit.jupiter.api.Test;
 
 import io.debezium.config.Configuration;
 import io.debezium.config.Field;

@@ -83,7 +83,7 @@ public class SyncEventToProtoMapper {
         MoveOutState moveOutState = partitionState.getMoveOutState();
         if (moveOutState != null) {
             SyncEventProtos.MoveOutState.Builder moveOutBuilder = SyncEventProtos.MoveOutState.newBuilder()
-                    .setTimestamp(moveOutState.getTimestamp().toProto().getSeconds())
+                    .setCommitTimestamp(moveOutState.getTimestamp().toProto())
                     .addAllDestPartitionTokens(moveOutState.getDestPartitionTokens());
             builder.setMoveOutState(moveOutBuilder.build());
         }
@@ -91,7 +91,7 @@ public class SyncEventToProtoMapper {
         MoveInState moveInState = partitionState.getMoveInState();
         if (moveInState != null) {
             SyncEventProtos.MoveInState.Builder moveInBuilder = SyncEventProtos.MoveInState.newBuilder()
-                    .setTimestamp(moveInState.getTimestamp().toProto().getSeconds())
+                    .setCommitTimestamp(moveInState.getTimestamp().toProto())
                     .setRecordSequence(moveInState.getRecordSequence() != null ? moveInState.getRecordSequence() : "")
                     .addAllSourcePartitionTokens(moveInState.getSourcePartitionTokens());
             builder.setMoveInState(moveInBuilder.build());

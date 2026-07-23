@@ -84,7 +84,7 @@ public class SyncEventFromProtoMapper {
         if (partitionState.hasMoveOutState()) {
             SyncEventProtos.MoveOutState proto = partitionState.getMoveOutState();
             moveOutState = new MoveOutState(
-                    Timestamp.ofTimeSecondsAndNanos(proto.getTimestamp(), 0),
+                    Timestamp.fromProto(proto.getCommitTimestamp()),
                     proto.getDestPartitionTokensList());
         }
 
@@ -95,7 +95,7 @@ public class SyncEventFromProtoMapper {
                     ? proto.getRecordSequence()
                     : null;
             moveInState = new MoveInState(
-                    Timestamp.ofTimeSecondsAndNanos(proto.getTimestamp(), 0),
+                    Timestamp.fromProto(proto.getCommitTimestamp()),
                     seq,
                     proto.getSourcePartitionTokensList());
         }
