@@ -21,8 +21,8 @@ import io.debezium.connector.spanner.task.TaskSyncContext;
 /**
  * Updates the {@link MoveOutState} for a source partition that has processed a MoveOut event.
  * Writes the commit timestamp and destination partition tokens into the owning task's
- * {@link PartitionState} and triggers a sync-topic publish so destination partitions
- * can observe it via {@code CanDestPartitionContinue()}.
+ * {@link PartitionState} and triggers a sync-topic publish so that destination partitions
+ * can observe the updated {@link PartitionState#getMoveOutState()} via the sync topic.
  */
 public class MoveOutStateUpdateOperation implements Operation {
 
