@@ -21,7 +21,7 @@ import java.util.stream.IntStream;
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.source.SourceRecord;
 import org.junit.jupiter.api.*;
-import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
+import org.junit.jupiter.api.condition.EnabledIf;
 
 import io.debezium.config.Configuration;
 import io.debezium.util.Testing;
@@ -29,7 +29,18 @@ import io.debezium.util.Testing;
 /**
  * Integration tests for mutable key range change streams.
  *
- * <p>Requires a running Spanner Omni instance. Run with:
+ * <p>The emulator cannot run mutable key range change streams, so this test requires one of two
+ * non-emulator backends:
+ *
+ * <p><b>Real Cloud Spanner</b> (preferred): run with
+ * <pre>
+ *   -Preal-spanner
+ * </pre>
+ * (or directly, {@code -Ddebezium.test.spanner.mode=real} plus {@code gcp.spanner.project.id}/
+ * {@code gcp.spanner.instance.id} pointed at a persistent instance and valid Application Default
+ * Credentials).
+ *
+ * <p><b>Spanner Omni</b> (legacy path, still supported): run with
  * <pre>
  *   -Dspanner.type=OMNI
  *   -Dgcp.spanner.host=https://your-omni-host:15000
@@ -39,8 +50,7 @@ import io.debezium.util.Testing;
  * <p>WINDOW_MINUTES is set to 1 so the sliding-window processedTimestamp
  * test completes in ~2 minutes instead of the production 20-minute default.
  */
-@Disabled
-@EnabledIfSystemProperty(named = "spanner.type", matches = "(?i)OMNI")
+@EnabledIf("hasNonEmulatorBackend")
 public class MutableKeyRangeIT extends AbstractSpannerConnectorIT {
 
     private static final String TABLE_CRUD = "mkr_crud_table";

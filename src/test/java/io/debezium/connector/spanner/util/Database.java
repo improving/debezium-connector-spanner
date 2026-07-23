@@ -17,6 +17,9 @@ public class Database {
     private static final String projectId = "test-project";
     private static final String instanceId = "test-instance";
 
+    private static final String SPANNER_MODE_PROPERTY_NAME = "debezium.test.spanner.mode";
+    private static final String REAL_MODE = "real";
+
     private final String databaseId;
 
     private Connection connection;
@@ -36,6 +39,10 @@ public class Database {
         return BaseSpannerConnectorConfig.SpannerType.OMNI.name().equalsIgnoreCase(getSpannerType());
     }
 
+    public static boolean isRealSpannerMode() {
+        return REAL_MODE.equalsIgnoreCase(System.getProperty(SPANNER_MODE_PROPERTY_NAME, "emulator"));
+    }
+
     public static final Database TEST_DATABASE = Database.builder()
             .generateDatabaseId()
             .build();
@@ -46,11 +53,17 @@ public class Database {
             .build();
 
     public String getProjectId() {
-        return isSpannerOmniEndpoint() ? DatabaseClientFactory.SPANNER_OMNI_DEFAULT_ID : projectId;
+        if (isSpannerOmniEndpoint()) {
+            return DatabaseClientFactory.SPANNER_OMNI_DEFAULT_ID;
+        }
+        return isRealSpannerMode() ? System.getProperty("gcp.spanner.project.id", projectId) : projectId;
     }
 
     public String getInstanceId() {
-        return isSpannerOmniEndpoint() ? DatabaseClientFactory.SPANNER_OMNI_DEFAULT_ID : instanceId;
+        if (isSpannerOmniEndpoint()) {
+            return DatabaseClientFactory.SPANNER_OMNI_DEFAULT_ID;
+        }
+        return isRealSpannerMode() ? System.getProperty("gcp.spanner.instance.id", instanceId) : instanceId;
     }
 
     public String getDatabaseId() {

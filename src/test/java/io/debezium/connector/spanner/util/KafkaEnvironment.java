@@ -25,6 +25,16 @@ public class KafkaEnvironment {
     private static final String KAFKA_BROKER_SERVICE_NAME = "broker";
     private static final int KAFKA_BROKER_SERVICE_API_PORT = 9092;
 
+    private static final int KAFKA_BROKER_CONTAINER_NETWORK_API_PORT = 29092;
+
+    private static final String KAFKA_CONNECT_MODE_PROPERTY = "debezium.test.kafka-connect.mode";
+    private static final String REAL_MODE = "real";
+    private static final String REAL_MODE_BROKER_HOST = "localhost";
+
+    private static boolean isRealConnectMode() {
+        return REAL_MODE.equalsIgnoreCase(System.getProperty(KAFKA_CONNECT_MODE_PROPERTY, "embedded"));
+    }
+
     public static final Duration STARTUP_TIMEOUT = Duration.ofSeconds(200L);
     public static final Duration STARTUP_CONNECTOR_TIMEOUT = Duration.ofSeconds(600L);
     public static final Duration CONFIGURE_CONNECTOR_TIMEOUT = Duration.ofSeconds(200L);
@@ -48,6 +58,12 @@ public class KafkaEnvironment {
 
     public void start() {
 
+        if (isRealConnectMode()) {
+            Testing.print("Real connect mode: skipping Kafka broker ComposeContainer start, using externally-managed broker");
+            this.brokerApiOn = KafkaBrokerApi.createKafkaBrokerApiObjectNode(REAL_MODE_BROKER_HOST, KAFKA_BROKER_SERVICE_API_PORT);
+            return;
+        }
+
         Testing.print("Starting Kafka environment");
         this.composeContainer.start();
         ContainerState brokerState = (ContainerState) composeContainer
@@ -59,6 +75,10 @@ public class KafkaEnvironment {
 
     public KafkaBrokerApi<ObjectNode, ObjectNode> kafkaBrokerApiOn() {
         return brokerApiOn;
+    }
+
+    public String kafkaBrokerContainerNetworkAddress() {
+        return KAFKA_BROKER_SERVICE_NAME + ":" + KAFKA_BROKER_CONTAINER_NETWORK_API_PORT;
     }
 
     public boolean isStarted() {
@@ -76,15 +96,23 @@ public class KafkaEnvironment {
             Arrays.asList("_kafka-connect-configs",
                     "_kafka-connect-offsets",
                     "_kafka-connect-status",
-                    "_kafka-connect-status",
                     "_schemas",
                     "_confluent-command",
                     "_confluent_balancer_api_state",
                     "_confluent-metrics",
                     "__consumer_offsets",
-                    "_confluent-telemetry-metrics",
-                    "_rebalancing_topic_spanner_connector_testing-connector").forEach(
+                    "_confluent-telemetry-metrics").forEach(
                             topics::remove);
+            if (isRealConnectMode()) {
+                // Real mode's Connect worker is long-lived across the whole session (spans every
+                // *IT class), so these connector-internal topics must survive between classes -
+                // deleting them mid-session races with the worker's own topic-existence checks
+                // (see design.md Decision #4 / Task 8.6). Embedded mode has no such long-lived
+                // worker; every class shares the same literal engine name (Task 6.4), so these
+                // topics must be cleared between classes to avoid leaking stale TaskSyncContext
+                // state into the next class's fresh engine (Task 8.8).
+                topics.removeIf(t -> t.startsWith("_sync_topic_spanner_connector_") || t.startsWith("_rebalancing_topic_spanner_connector_"));
+            }
             adminClient.deleteTopics(topics);
         }
         catch (Exception e) {
@@ -94,6 +122,9 @@ public class KafkaEnvironment {
     }
 
     public void stop() {
+        if (isRealConnectMode()) {
+            return;
+        }
         if (composeContainer != null) {
             composeContainer.stop();
         }
