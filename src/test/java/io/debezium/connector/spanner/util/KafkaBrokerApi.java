@@ -27,14 +27,14 @@ public class KafkaBrokerApi<K, V> {
 
     public static final int POLL_FIRST_RECORDS_TIMEOUT_MAX_MINUTES = 10;
 
-    private final ContainerState containerState;
+    private final String host;
 
     private final int kafkaPort;
 
     private final Properties properties;
 
-    public KafkaBrokerApi(ContainerState containerState, int kafkaPort, Properties properties) {
-        this.containerState = containerState;
+    public KafkaBrokerApi(String host, int kafkaPort, Properties properties) {
+        this.host = host;
         this.kafkaPort = kafkaPort;
         this.properties = SerializationUtils.clone(properties);
     }
@@ -45,14 +45,18 @@ public class KafkaBrokerApi<K, V> {
 
     public static KafkaBrokerApi<ObjectNode, ObjectNode> createKafkaBrokerApiObjectNode(ContainerState containerState,
                                                                                         int kafkaPort) {
+        return createKafkaBrokerApiObjectNode(containerState.getHost(), kafkaPort);
+    }
+
+    public static KafkaBrokerApi<ObjectNode, ObjectNode> createKafkaBrokerApiObjectNode(String host, int kafkaPort) {
         final Properties props = new Properties();
-        props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, containerState.getHost() + ":" + kafkaPort);
+        props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, host + ":" + kafkaPort);
         props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
-        return new KafkaBrokerApi<>(containerState, kafkaPort, props);
+        return new KafkaBrokerApi<>(host, kafkaPort, props);
     }
 
     public String getAddress() {
-        return containerState.getHost() + ":" + kafkaPort;
+        return host + ":" + kafkaPort;
     }
 
     public AdminClient createAdminClient() {

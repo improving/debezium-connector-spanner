@@ -33,14 +33,16 @@
         <assembly.descriptor>connector-distribution-with-jsr310</assembly.descriptor>
         <docker.tag.name>latest</docker.tag.name>
         <docker.skip.push>true</docker.skip.push>
-        <docker.repository.name>quay.io/debezium/kafka-spanner-connector</docker.repository.name>
+        <docker.repository.name>kafka-spanner-connector</docker.repository.name>
         <!--
           Specify the properties that will be used for setting up the integration tests' Docker container.
         -->
         <docker.db>gcr.io/cloud-spanner-emulator/emulator</docker.db>
         <docker.filter>${docker.db},${docker.repository.name}:${docker.tag.name}</docker.filter>
         <docker.skip>false</docker.skip>
+        <docker.skip.emulator>${docker.skip}</docker.skip.emulator>
         <docker.showLogs>true</docker.showLogs>
+        <docker.it.network.name>spanner-connector-it-network</docker.it.network.name>
 
         <publish.descriptorset>false</publish.descriptorset>
     </properties>
@@ -474,11 +476,17 @@
                     <logDate>default</logDate>
                     <verbose>true</verbose>
                     <imagePullPolicy>IfNotPresent</imagePullPolicy>
+                    <!-- Required so docker-maven-plugin creates the custom network referenced below instead of expecting it to already exist. -->
+                    <autoCreateCustomNetworks>true</autoCreateCustomNetworks>
                     <images>
                         <image>
                             <name>${docker.db}</name>
                             <run>
-                                <namingStrategy>none</namingStrategy>
+                                <containerNamePattern>spanner-emulator</containerNamePattern>
+                                <network>
+                                    <mode>custom</mode>
+                                    <name>${docker.it.network.name}</name>
+                                </network>
                                 <ports>
                                     <port>9010:9010</port>
                                     <port>9020:9020</port>
@@ -493,10 +501,6 @@
                                     <log>Cloud Spanner Emulator running.</log>
                                 </wait>
                             </run>
-                            <external>
-                                <type>properties</type>
-                                <mode>override</mode>
-                            </external>
                         </image>
                     </images>
                 </configuration>
@@ -557,6 +561,9 @@
                         <goals>
                             <goal>start</goal>
                         </goals>
+                        <configuration>
+                            <skip>${docker.skip.emulator}</skip>
+                        </configuration>
                     </execution>
                     <execution>
                         <id>stop</id>
@@ -564,6 +571,9 @@
                         <goals>
                             <goal>stop</goal>
                         </goals>
+                        <configuration>
+                            <skip>${docker.skip.emulator}</skip>
+                        </configuration>
                     </execution>
                 </executions>
             </plugin>
@@ -670,9 +680,6 @@
                     <name>skipITs</name>
                 </property>
             </activation>
-            <properties>
-                <docker.skip>true</docker.skip>
-            </properties>
         </profile>
         <profile>
             <id>quick</id>
@@ -782,6 +789,158 @@
                                     <destFile>target/jacoco.exec</destFile>
                                     <!-- Sets the VM argument line used when unit tests are run. -->
                                     <propertyName>surefireArgLine</propertyName>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <profile>
+            <id>real-spanner</id>
+            <activation>
+                <activeByDefault>false</activeByDefault>
+            </activation>
+            <properties>
+                <!-- Real mode talks to a persistent Cloud Spanner instance; don't spin up the local emulator container. -->
+                <docker.skip.emulator>true</docker.skip.emulator>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <configuration>
+                            <systemPropertyVariables>
+                                <debezium.test.spanner.mode>real</debezium.test.spanner.mode>
+                            </systemPropertyVariables>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <profile>
+            <id>real-connect</id>
+            <activation>
+                <activeByDefault>false</activeByDefault>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <configuration>
+                            <systemPropertyVariables>
+                                <debezium.test.kafka-connect.mode>real</debezium.test.kafka-connect.mode>
+                            </systemPropertyVariables>
+                        </configuration>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>start-broker-compose</id>
+                                <phase>pre-integration-test</phase>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
+                                <configuration>
+                                    <executable>sh</executable>
+                                    <arguments>
+                                        <argument>-c</argument>
+                                        <argument>docker network create ${docker.it.network.name} 2>/dev/null; docker compose -f src/test/java/io/debezium/connector/spanner/util/docker-compose.yml up -d</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>stop-broker-compose</id>
+                                <phase>post-integration-test</phase>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
+                                <configuration>
+                                    <executable>docker</executable>
+                                    <arguments>
+                                        <argument>compose</argument>
+                                        <argument>-f</argument>
+                                        <argument>src/test/java/io/debezium/connector/spanner/util/docker-compose.yml</argument>
+                                        <argument>down</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>io.fabric8</groupId>
+                        <artifactId>docker-maven-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>start-real-connect</id>
+                                <phase>pre-integration-test</phase>
+                                <goals>
+                                    <goal>start</goal>
+                                </goals>
+                                <configuration>
+                                    <images>
+                                        <image>
+                                            <name>${docker.repository.name}:${docker.tag.name}</name>
+                                            <run>
+                                                <containerNamePattern>kafka-connect-worker</containerNamePattern>
+                                                <network>
+                                                    <mode>custom</mode>
+                                                    <name>${docker.it.network.name}</name>
+                                                </network>
+                                                <ports>
+                                                    <port>8083:8083</port>
+                                                </ports>
+                                                <env>
+                                                    <CONNECT_BOOTSTRAP_SERVERS>broker:29092</CONNECT_BOOTSTRAP_SERVERS>
+                                                    <CONNECT_GROUP_ID>spanner-real-connect-cluster</CONNECT_GROUP_ID>
+                                                    <CONNECT_CONFIG_STORAGE_TOPIC>_kafka-connect-configs</CONNECT_CONFIG_STORAGE_TOPIC>
+                                                    <CONNECT_OFFSET_STORAGE_TOPIC>_kafka-connect-offsets</CONNECT_OFFSET_STORAGE_TOPIC>
+                                                    <CONNECT_STATUS_STORAGE_TOPIC>_kafka-connect-status</CONNECT_STATUS_STORAGE_TOPIC>
+                                                    <CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR>1</CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR>
+                                                    <CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR>1</CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR>
+                                                    <CONNECT_STATUS_STORAGE_REPLICATION_FACTOR>1</CONNECT_STATUS_STORAGE_REPLICATION_FACTOR>
+                                                    <CONNECT_KEY_CONVERTER>org.apache.kafka.connect.json.JsonConverter</CONNECT_KEY_CONVERTER>
+                                                    <CONNECT_VALUE_CONVERTER>org.apache.kafka.connect.json.JsonConverter</CONNECT_VALUE_CONVERTER>
+                                                    <CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE>true</CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE>
+                                                    <CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE>true</CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE>
+                                                    <CONNECT_REST_PORT>8083</CONNECT_REST_PORT>
+                                                    <CONNECT_REST_ADVERTISED_HOST_NAME>kafka-connect-worker</CONNECT_REST_ADVERTISED_HOST_NAME>
+                                                    <CONNECT_PLUGIN_PATH>/usr/share/java</CONNECT_PLUGIN_PATH>
+                                                </env>
+                                                <log>
+                                                    <prefix>kafka-connect-worker</prefix>
+                                                    <enabled>true</enabled>
+                                                    <color>cyan</color>
+                                                </log>
+                                                <wait>
+                                                    <http>
+                                                        <url>http://localhost:8083/connectors</url>
+                                                        <method>GET</method>
+                                                        <status>200</status>
+                                                    </http>
+                                                    <time>120000</time>
+                                                </wait>
+                                            </run>
+                                        </image>
+                                    </images>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>stop-real-connect</id>
+                                <phase>post-integration-test</phase>
+                                <goals>
+                                    <goal>stop</goal>
+                                </goals>
+                                <configuration>
+                                    <images>
+                                        <image>
+                                            <name>${docker.repository.name}:${docker.tag.name}</name>
+                                        </image>
+                                    </images>
                                 </configuration>
                             </execution>
                         </executions>
