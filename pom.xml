@@ -33,7 +33,7 @@
         <assembly.descriptor>connector-distribution-with-jsr310</assembly.descriptor>
         <docker.tag.name>latest</docker.tag.name>
         <docker.skip.push>true</docker.skip.push>
-        <docker.repository.name>quay.io/debezium/kafka-spanner-connector</docker.repository.name>
+        <docker.repository.name>kafka-spanner-connector</docker.repository.name>
         <!--
           Specify the properties that will be used for setting up the integration tests' Docker container.
         -->
@@ -41,14 +41,6 @@
         <docker.filter>${docker.db},${docker.repository.name}:${docker.tag.name}</docker.filter>
         <docker.skip>false</docker.skip>
         <docker.showLogs>true</docker.showLogs>
-        <!--
-          Fixed Docker network name shared between the Testcontainers-managed Kafka broker
-          (KafkaEnvironment / docker-compose.yml) and the docker-maven-plugin-managed Spanner
-          emulator (and, under the real-connect profile, the Kafka Connect worker). Created by
-          the emulator's docker-maven-plugin "start" execution (pre-integration-test), which runs
-          before the Testcontainers compose environment starts (during static init in the
-          integration-test phase).
-        -->
         <docker.it.network.name>spanner-connector-it-network</docker.it.network.name>
 
         <publish.descriptorset>false</publish.descriptorset>
@@ -483,21 +475,12 @@
                     <logDate>default</logDate>
                     <verbose>true</verbose>
                     <imagePullPolicy>IfNotPresent</imagePullPolicy>
-                    <!--
-                      The emulator's <network> config (and the real-connect profile's Kafka Connect
-                      worker <network> config) reference a custom network by name; without this,
-                      docker-maven-plugin expects that network to already exist and fails to start.
-                    -->
+                    <!-- Required so docker-maven-plugin creates the custom network referenced below instead of expecting it to already exist. -->
                     <autoCreateCustomNetworks>true</autoCreateCustomNetworks>
                     <images>
                         <image>
                             <name>${docker.db}</name>
                             <run>
-                                <!-- namingStrategy is deprecated and, when set (even to "none"), causes
-                                     docker-maven-plugin to ignore containerNamePattern and fall back to its
-                                     default "%n-%i" pattern (e.g. "emulator-1"), which breaks DNS resolution
-                                     by the fixed hostname other containers (the real-connect Connect worker)
-                                     expect. Omit it and rely on containerNamePattern alone. -->
                                 <containerNamePattern>spanner-emulator</containerNamePattern>
                                 <network>
                                     <mode>custom</mode>
@@ -517,18 +500,6 @@
                                     <log>Cloud Spanner Emulator running.</log>
                                 </wait>
                             </run>
-                            <!-- No <external> properties-based config here: this project doesn't
-                                 define any docker.<alias>.* properties, and this block was found
-                                 to leak (via Maven's own plugin-configuration merge, which unions
-                                 same-position <images><image> elements between the plugin-level
-                                 <configuration> and every <execution>'s own <configuration>) into
-                                 every other docker-maven-plugin execution's resolved image config,
-                                 including the unrelated real-connect profile's Connect worker
-                                 <image>. Its "properties, override" mode then silently drops
-                                 <run><containerNamePattern> before the actual container-creation
-                                 call, causing Docker to fall back to its default "%n-%i" naming
-                                 (e.g. "emulator-1" instead of "spanner-emulator") and breaking
-                                 container-to-container DNS resolution under real-connect mode. -->
                         </image>
                     </images>
                 </configuration>
@@ -822,12 +793,6 @@
             </build>
         </profile>
         <profile>
-            <!--
-              Runs the *IT.java integration test suite against a real, dockerized Kafka Connect
-              worker (quay.io/debezium/kafka-spanner-connector) instead of the embedded engine.
-              Plain `mvn verify` never activates this profile, so the default developer workflow
-              starts no extra containers and is otherwise unaffected.
-            -->
             <id>real-connect</id>
             <activation>
                 <activeByDefault>false</activeByDefault>
@@ -843,21 +808,6 @@
                             </systemPropertyVariables>
                         </configuration>
                     </plugin>
-                    <!--
-                      Starts the Testcontainers-managed Kafka broker's own docker-compose.yml directly
-                      via the docker CLI, ahead of the Connect worker container below, so the broker
-                      already exists by the time the worker's boot-time kafka-ready check runs. See
-                      design.md Decision #6 (Option C). KafkaEnvironment detects real mode and skips its
-                      own ComposeContainer start/stop in that case, so this becomes the sole owner of the
-                      broker's lifecycle under this profile.
-
-                      docker-compose.yml declares its network as external (created by whichever tool
-                      starts first; see docker.it.network.name above). Plugin execution order across
-                      *different* plugins bound to the same Maven phase is not reliable enough to depend
-                      on the emulator's docker-maven-plugin "start" execution (which has
-                      autoCreateCustomNetworks) having already created it, so this execution creates the
-                      network itself (idempotently) before bringing the broker up.
-                    -->
                     <plugin>
                         <groupId>org.codehaus.mojo</groupId>
                         <artifactId>exec-maven-plugin</artifactId>
@@ -918,8 +868,6 @@
                                                     <port>8083:8083</port>
                                                 </ports>
                                                 <env>
-                                                    <!-- Container-network listener (docker-compose.yml's PLAINTEXT, port 29092),
-                                                         not the host-mapped PLAINTEXT_HOST listener (port 9092) embedded mode uses. -->
                                                     <CONNECT_BOOTSTRAP_SERVERS>broker:29092</CONNECT_BOOTSTRAP_SERVERS>
                                                     <CONNECT_GROUP_ID>spanner-real-connect-cluster</CONNECT_GROUP_ID>
                                                     <CONNECT_CONFIG_STORAGE_TOPIC>_connect-configs</CONNECT_CONFIG_STORAGE_TOPIC>

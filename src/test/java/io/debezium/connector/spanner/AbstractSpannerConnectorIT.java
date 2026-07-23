@@ -29,11 +29,6 @@ import io.debezium.util.Testing;
 
 public class AbstractSpannerConnectorIT extends AbstractAsyncEngineConnectorTest {
 
-    /**
-     * System property consumed to switch between the embedded engine (default) and a real,
-     * dockerized Kafka Connect worker, set to {@code real} by the {@code real-connect} Maven
-     * profile. See {@code openspec/changes/spanner-real-kafka-connect-testing}.
-     */
     private static final String KAFKA_CONNECT_MODE_PROPERTY = "debezium.test.kafka-connect.mode";
     private static final String REAL_MODE = "real";
 
@@ -126,21 +121,12 @@ public class AbstractSpannerConnectorIT extends AbstractAsyncEngineConnectorTest
         return REAL_MODE.equalsIgnoreCase(System.getProperty(KAFKA_CONNECT_MODE_PROPERTY, "embedded"));
     }
 
-    /**
-     * The Kafka bootstrap address the connector configuration should use: the container-network
-     * address in real mode (the connector runs inside the Kafka Connect worker container), or the
-     * host-mapped address in embedded mode (the connector runs in this JVM).
-     */
     private static String kafkaBootstrapServersForConnector() {
         return isRealConnectMode()
                 ? KAFKA_ENVIRONMENT.kafkaBrokerContainerNetworkAddress()
                 : KAFKA_ENVIRONMENT.kafkaBrokerApiOn().getAddress();
     }
 
-    /**
-     * The Spanner emulator address the connector configuration should use, mirroring
-     * {@link #kafkaBootstrapServersForConnector()}.
-     */
     private static String emulatorHostForConnector() {
         return isRealConnectMode() ? Connection.containerNetworkEmulatorHost : Connection.emulatorHost;
     }
@@ -152,17 +138,6 @@ public class AbstractSpannerConnectorIT extends AbstractAsyncEngineConnectorTest
         return connectRestClient;
     }
 
-    /**
-     * Real-mode start: deploys the connector to the dockerized Kafka Connect worker via REST and
-     * starts a background consumer poller feeding {@code consumedLines}, instead of the embedded
-     * engine. Falls back to {@code super} in embedded mode (default).
-     *
-     * Note: only this two-argument overload (used by all {@code *IT.java} start/restart flows) is
-     * made mode-aware; the {@code CompletionCallback}-based overload used by
-     * {@code BasicSanityCheckIT}'s config-validation-failure tests continues to run against the
-     * embedded engine even under the {@code real-connect} profile, since real mode's scope here is
-     * successful deploy/stop/restart round trips via the REST API, not per-call validation.
-     */
     @Override
     protected void start(Class<? extends SourceConnector> connectorClass, Configuration connectorConfig) {
         if (!isRealConnectMode()) {
@@ -173,11 +148,6 @@ public class AbstractSpannerConnectorIT extends AbstractAsyncEngineConnectorTest
         KafkaConnectRestClient client = connectRestClient();
         client.waitForWorkerReady(KafkaEnvironment.STARTUP_TIMEOUT);
 
-        // Force the connector/topic-prefix name to the fixed DEFAULT_REAL_MODE_CONNECTOR_NAME,
-        // mirroring AbstractConnectorTest's embedded-mode override (EmbeddedEngineConfig.ENGINE_NAME
-        // set to "testing-connector"), so the real topic prefix (BaseSpannerConnectorConfig derives
-        // it from the "name" config) matches getTopicName()'s hardcoded expectation regardless of
-        // whatever "name" the test's connector config carries.
         Map<String, String> configMap = new HashMap<>(connectorConfig.asMap());
         configMap.put("connector.class", connectorClass.getName());
         configMap.put(BaseSpannerConnectorConfig.CONNECTOR_NAME_PROPERTY_NAME, DEFAULT_REAL_MODE_CONNECTOR_NAME);
@@ -193,10 +163,6 @@ public class AbstractSpannerConnectorIT extends AbstractAsyncEngineConnectorTest
         realModePoller.start();
     }
 
-    /**
-     * Real-mode stop: removes the connector via REST and stops the record poller. Falls back to
-     * {@code super} in embedded mode (default).
-     */
     @Override
     public void stopConnector(BooleanConsumer callback) {
         if (!isRealConnectMode() || activeRealModeConnectorName == null) {

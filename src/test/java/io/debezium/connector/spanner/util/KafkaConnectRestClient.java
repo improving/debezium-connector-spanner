@@ -23,12 +23,6 @@ import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 
-/**
- * A small Kafka Connect REST client used by {@code AbstractSpannerConnectorIT} in real mode to
- * deploy, remove, and query the status of connectors running on a real, dockerized Kafka Connect
- * worker, mirroring (in scoped-down form) the pattern used by {@code JsonConnectorDeployer} /
- * {@code DockerKafkaConnectController} in {@code debezium-testing-system}.
- */
 public class KafkaConnectRestClient {
 
     private static final Logger LOG = LoggerFactory.getLogger(KafkaConnectRestClient.class);
@@ -43,10 +37,6 @@ public class KafkaConnectRestClient {
         this.http = new OkHttpClient();
     }
 
-    /**
-     * Waits until the worker's REST API responds successfully to {@code GET /connectors},
-     * mirroring {@code KafkaConnectController.waitForCluster()}.
-     */
     public void waitForWorkerReady(Duration timeout) {
         Awaitility.await()
                 .atMost(timeout)
@@ -64,9 +54,6 @@ public class KafkaConnectRestClient {
         }
     }
 
-    /**
-     * Deploys (or updates) a connector via {@code PUT /connectors/{name}/config}.
-     */
     public void deployConnector(String name, Map<String, String> config) {
         LOG.info("Deploying connector '{}' to real Kafka Connect worker", name);
         HttpUrl url = baseUrl.newBuilder()
@@ -98,10 +85,6 @@ public class KafkaConnectRestClient {
         }
     }
 
-    /**
-     * Removes a connector via {@code DELETE /connectors/{name}}. A 404 (already absent) is
-     * treated as success.
-     */
     public void deleteConnector(String name) {
         LOG.info("Removing connector '{}' from real Kafka Connect worker", name);
         HttpUrl url = baseUrl.newBuilder()
@@ -119,10 +102,6 @@ public class KafkaConnectRestClient {
         }
     }
 
-    /**
-     * Returns the connector's state (e.g. {@code RUNNING}, {@code FAILED}) from
-     * {@code GET /connectors/{name}/status}, or {@code null} if the connector is not registered.
-     */
     public String getConnectorState(String name) {
         HttpUrl url = baseUrl.newBuilder()
                 .addPathSegment("connectors")
@@ -149,9 +128,6 @@ public class KafkaConnectRestClient {
         return "RUNNING".equals(getConnectorState(name));
     }
 
-    /**
-     * Waits until the connector reaches the {@code RUNNING} state.
-     */
     public void waitForConnectorRunning(String name, Duration timeout) {
         Awaitility.await()
                 .atMost(timeout)
@@ -159,9 +135,6 @@ public class KafkaConnectRestClient {
                 .until(() -> isConnectorRunning(name));
     }
 
-    /**
-     * Waits until the connector (and its tasks) are no longer registered on the worker.
-     */
     public void waitForConnectorAbsent(String name, Duration timeout) {
         Awaitility.await()
                 .atMost(timeout)

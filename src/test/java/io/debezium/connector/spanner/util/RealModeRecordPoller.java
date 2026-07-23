@@ -28,18 +28,6 @@ import org.apache.kafka.connect.source.SourceRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/**
- * Bridges a real Kafka Connect worker's output topics into the {@code consumedLines} queue that
- * {@code AbstractConnectorTest} already populates in embedded mode, so
- * {@code consumeRecordsByTopic}/{@code waitForAvailableRecords} require no overrides in real mode.
- *
- * <p>A dedicated background thread owns a {@code KafkaConsumer<byte[], byte[]>} subscribed to the
- * connector's data topics, decodes each record with the same JSON-with-schemas converter
- * configuration the Connect worker itself uses, and hands the resulting {@code SourceRecord} to the
- * queue. Because a plain consumer read cannot recover the original engine's offsets, the emitted
- * records carry empty {@code sourcePartition}/{@code sourceOffset} maps; this is acceptable since
- * existing assertions in the {@code *IT.java} suite only ever inspect {@code key()}/{@code value()}.
- */
 public class RealModeRecordPoller {
 
     private static final Logger LOG = LoggerFactory.getLogger(RealModeRecordPoller.class);
@@ -68,10 +56,6 @@ public class RealModeRecordPoller {
         consumerProps.setProperty(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
         consumerProps.setProperty(ConsumerConfig.GROUP_ID_CONFIG, "spanner-real-mode-verification-" + UUID.randomUUID());
         consumerProps.setProperty(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
-        // Pattern-subscribed consumers only pick up newly-created matching topics on the metadata
-        // refresh cycle (default 300000ms); the poller subscribes before the connector's output
-        // topic exists, so this must be short enough to notice the topic within the test's wait
-        // window (see design.md Decision on Task 6.4).
         consumerProps.setProperty(ConsumerConfig.METADATA_MAX_AGE_CONFIG, "1000");
         consumerProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class);
         consumerProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class);
@@ -86,9 +70,6 @@ public class RealModeRecordPoller {
         return jsonConverter;
     }
 
-    /**
-     * Subscribes to the configured topic pattern and starts the background polling thread.
-     */
     public void start() {
         shouldRun = true;
         consumer.subscribe(subscribedTopics);
@@ -136,9 +117,6 @@ public class RealModeRecordPoller {
                 decodedValue.value());
     }
 
-    /**
-     * Signals the background thread to stop, waits for it to finish, and releases the consumer.
-     */
     public void stop() {
         shouldRun = false;
         consumer.wakeup();

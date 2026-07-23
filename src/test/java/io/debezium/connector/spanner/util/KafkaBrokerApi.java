@@ -15,13 +15,6 @@ import org.testcontainers.containers.ContainerState;
 
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-/**
- * Kafka broker connectivity helper. Constructed either from a Testcontainers {@link ContainerState}
- * (embedded mode, where {@code KafkaEnvironment} manages the broker container directly) or from a
- * fixed host string (real mode, where the broker is started externally via {@code docker compose}
- * and this JVM only ever talks to its host-mapped port; see {@code KafkaEnvironment}).
- */
-
 public class KafkaBrokerApi<K, V> {
 
     protected static final String SCHEMA_REGISTRY_PORT = "8081";
@@ -55,11 +48,6 @@ public class KafkaBrokerApi<K, V> {
         return createKafkaBrokerApiObjectNode(containerState.getHost(), kafkaPort);
     }
 
-    /**
-     * Builds a {@link KafkaBrokerApi} for a fixed host, as opposed to one derived from a Testcontainers
-     * {@link ContainerState}. Used in real mode, where the broker is started externally via
-     * {@code docker compose} rather than through this JVM's Testcontainers {@code ComposeContainer}.
-     */
     public static KafkaBrokerApi<ObjectNode, ObjectNode> createKafkaBrokerApiObjectNode(String host, int kafkaPort) {
         final Properties props = new Properties();
         props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, host + ":" + kafkaPort);
