@@ -26,6 +26,6 @@ public interface PartitionManager {
 
     void notifyMoveOut(String token, Timestamp commitTimestamp, List<String> destinationTokens) throws InterruptedException;
 
-    void updateProcessedTimestamp(String token, Timestamp processedTimestamp) throws InterruptedException;
+    void updateProcessedTimestamp(String token, Timestamp processedTimestamp, String lastBoundaryRecordSequence) throws InterruptedException;
 
 }

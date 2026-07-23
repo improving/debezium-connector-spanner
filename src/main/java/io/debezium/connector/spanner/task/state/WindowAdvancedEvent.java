@@ -9,16 +9,19 @@ import com.google.cloud.Timestamp;
 
 /**
  * Event fired at the end of each mutable-stream sliding window to persist the
- * window boundary timestamp in {@link io.debezium.connector.spanner.kafka.internal.model.PartitionState}.
+ * window boundary timestamp and boundary record sequence in
+ * {@link io.debezium.connector.spanner.kafka.internal.model.PartitionState}.
  */
-public class ProcessedTimestampUpdateEvent implements TaskStateChangeEvent {
+public class WindowAdvancedEvent implements TaskStateChangeEvent {
 
     private final String token;
     private final Timestamp processedTimestamp;
+    private final String lastBoundaryRecordSequence;
 
-    public ProcessedTimestampUpdateEvent(String token, Timestamp processedTimestamp) {
+    public WindowAdvancedEvent(String token, Timestamp processedTimestamp, String lastBoundaryRecordSequence) {
         this.token = token;
         this.processedTimestamp = processedTimestamp;
+        this.lastBoundaryRecordSequence = lastBoundaryRecordSequence;
     }
 
     public String getToken() {
@@ -27,5 +30,9 @@ public class ProcessedTimestampUpdateEvent implements TaskStateChangeEvent {
 
     public Timestamp getProcessedTimestamp() {
         return processedTimestamp;
+    }
+
+    public String getLastBoundaryRecordSequence() {
+        return lastBoundaryRecordSequence;
     }
 }

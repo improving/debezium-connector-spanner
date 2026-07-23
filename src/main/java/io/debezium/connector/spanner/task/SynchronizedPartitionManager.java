@@ -15,8 +15,8 @@ import io.debezium.connector.spanner.kafka.internal.model.PartitionStateEnum;
 import io.debezium.connector.spanner.task.state.MoveOutNotificationEvent;
 import io.debezium.connector.spanner.task.state.NewPartitionsEvent;
 import io.debezium.connector.spanner.task.state.PartitionStatusUpdateEvent;
-import io.debezium.connector.spanner.task.state.ProcessedTimestampUpdateEvent;
 import io.debezium.connector.spanner.task.state.TaskStateChangeEvent;
+import io.debezium.connector.spanner.task.state.WindowAdvancedEvent;
 import io.debezium.function.BlockingConsumer;
 
 /**
@@ -63,8 +63,8 @@ public class SynchronizedPartitionManager implements PartitionManager {
     }
 
     @Override
-    public void updateProcessedTimestamp(String token, Timestamp processedTimestamp) throws InterruptedException {
-        syncEventPublisher.accept(new ProcessedTimestampUpdateEvent(token, processedTimestamp));
+    public void updateProcessedTimestamp(String token, Timestamp processedTimestamp, String lastBoundaryRecordSequence) throws InterruptedException {
+        syncEventPublisher.accept(new WindowAdvancedEvent(token, processedTimestamp, lastBoundaryRecordSequence));
     }
 
 }

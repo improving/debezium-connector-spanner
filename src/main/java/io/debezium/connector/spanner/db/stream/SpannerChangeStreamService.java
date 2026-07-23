@@ -133,7 +133,7 @@ public class SpannerChangeStreamService {
         Timestamp partitionEndTimestamp = partition.getEndTimestamp();
 
         Timestamp processedTimestamp = partition.getStartTimestamp();
-        String lastBoundaryRecordSequence = null;
+        String lastBoundaryRecordSequence = partition.getLastBoundaryRecordSequence();
         boolean isPartitionEnded = false;
 
         while (!isPartitionEnded && (partitionEndTimestamp == null || isBeforeOrEqual(processedTimestamp, partitionEndTimestamp))) {
@@ -202,7 +202,7 @@ public class SpannerChangeStreamService {
 
             lastBoundaryRecordSequence = newBoundaryRecordSequence;
             processedTimestamp = endTimestamp;
-            partitionEventListener.onWindowAdvanced(partition, processedTimestamp);
+            partitionEventListener.onWindowAdvanced(partition, processedTimestamp, lastBoundaryRecordSequence);
         }
 
         partitionEventListener.onFinish(partition);

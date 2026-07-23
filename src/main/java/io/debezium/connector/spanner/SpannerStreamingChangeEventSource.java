@@ -155,8 +155,8 @@ public class SpannerStreamingChangeEventSource implements CommittingRecordsStrea
                 }
 
                 @Override
-                public void onWindowAdvanced(Partition partition, Timestamp windowEnd) throws InterruptedException {
-                    partitionManager.updateProcessedTimestamp(partition.getToken(), windowEnd);
+                public void onWindowAdvanced(Partition partition, Timestamp windowEnd, String lastBoundaryRecordSequence) throws InterruptedException {
+                    partitionManager.updateProcessedTimestamp(partition.getToken(), windowEnd, lastBoundaryRecordSequence);
                 }
             });
 

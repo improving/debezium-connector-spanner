@@ -182,7 +182,7 @@ class SpannerChangeStreamTest {
                     }
 
                     @Override
-                    public void onWindowAdvanced(Partition partition, Timestamp windowEnd) {
+                    public void onWindowAdvanced(Partition partition, Timestamp windowEnd, String lastBoundaryRecordSequence) {
                     }
                 });
 

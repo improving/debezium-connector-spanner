@@ -104,6 +104,11 @@ public class SyncEventFromProtoMapper {
                 ? Timestamp.parseTimestamp(partitionState.getProcessedTimestamp())
                 : null;
 
+        String lastBoundaryRecordSequence = partitionState.getLastBoundaryRecordSequence() != null
+                && !partitionState.getLastBoundaryRecordSequence().isEmpty()
+                        ? partitionState.getLastBoundaryRecordSequence()
+                        : null;
+
         return new PartitionState(
                 partitionState.getToken(),
                 Timestamp.parseTimestamp(partitionState.getStartTimestamp()),
@@ -119,6 +124,7 @@ public class SyncEventFromProtoMapper {
                 partitionState.getOriginParent(),
                 moveInState,
                 moveOutState,
-                processedTimestamp);
+                processedTimestamp,
+                lastBoundaryRecordSequence);
     }
 }

@@ -101,6 +101,10 @@ public class SyncEventToProtoMapper {
             builder.setProcessedTimestamp(partitionState.getProcessedTimestamp().toString());
         }
 
+        if (partitionState.getLastBoundaryRecordSequence() != null) {
+            builder.setLastBoundaryRecordSequence(partitionState.getLastBoundaryRecordSequence());
+        }
+
         return builder.build();
     }
 }

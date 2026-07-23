@@ -26,16 +26,16 @@ import io.debezium.connector.spanner.task.operation.FindPartitionForStreamingOpe
 import io.debezium.connector.spanner.task.operation.MoveOutStateUpdateOperation;
 import io.debezium.connector.spanner.task.operation.Operation;
 import io.debezium.connector.spanner.task.operation.PartitionStatusUpdateOperation;
-import io.debezium.connector.spanner.task.operation.ProcessedTimestampUpdateOperation;
 import io.debezium.connector.spanner.task.operation.RemoveFinishedPartitionOperation;
 import io.debezium.connector.spanner.task.operation.TakePartitionForStreamingOperation;
 import io.debezium.connector.spanner.task.operation.TakeSharedPartitionOperation;
+import io.debezium.connector.spanner.task.operation.WindowAdvancedOperation;
 import io.debezium.connector.spanner.task.state.MoveOutNotificationEvent;
 import io.debezium.connector.spanner.task.state.NewPartitionsEvent;
 import io.debezium.connector.spanner.task.state.PartitionStatusUpdateEvent;
-import io.debezium.connector.spanner.task.state.ProcessedTimestampUpdateEvent;
 import io.debezium.connector.spanner.task.state.SyncEvent;
 import io.debezium.connector.spanner.task.state.TaskStateChangeEvent;
+import io.debezium.connector.spanner.task.state.WindowAdvancedEvent;
 
 /**
  * This class processes all types of TaskStateChangeEvents (i.e. LastCommitTimestampUpdateEvent,
@@ -96,8 +96,8 @@ public class TaskStateChangeEventHandler {
         else if (syncEvent instanceof MoveOutNotificationEvent) {
             processEvent((MoveOutNotificationEvent) syncEvent);
         }
-        else if (syncEvent instanceof ProcessedTimestampUpdateEvent) {
-            processEvent((ProcessedTimestampUpdateEvent) syncEvent);
+        else if (syncEvent instanceof WindowAdvancedEvent) {
+            processEvent((WindowAdvancedEvent) syncEvent);
         }
         else {
             throw new IllegalStateException("Unknown event");
@@ -131,9 +131,9 @@ public class TaskStateChangeEventHandler {
                 event.getToken(), event.getCommitTimestamp(), event.getDestinationTokens()));
     }
 
-    private void processEvent(ProcessedTimestampUpdateEvent event) throws InterruptedException {
-        performOperation(new ProcessedTimestampUpdateOperation(
-                event.getToken(), event.getProcessedTimestamp()));
+    private void processEvent(WindowAdvancedEvent event) throws InterruptedException {
+        performOperation(new WindowAdvancedOperation(
+                event.getToken(), event.getProcessedTimestamp(), event.getLastBoundaryRecordSequence()));
     }
 
     private void processSyncEvent() throws InterruptedException {

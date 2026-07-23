@@ -70,6 +70,7 @@ public class PartitionFactory {
                     .startTimestamp(startTime)
                     .endTimestamp(partitionState.getEndTimestamp())
                     .parentTokens(partitionState.getParents())
+                    .lastBoundaryRecordSequence(partitionState.getLastBoundaryRecordSequence())
                     .build());
         }
         return partitionMap;
@@ -82,6 +83,7 @@ public class PartitionFactory {
                 .startTimestamp(resolveOffset(partitionState, offset))
                 .endTimestamp(partitionState.getEndTimestamp())
                 .parentTokens(partitionState.getParents())
+                .lastBoundaryRecordSequence(partitionState.getLastBoundaryRecordSequence())
                 .build();
     }
 

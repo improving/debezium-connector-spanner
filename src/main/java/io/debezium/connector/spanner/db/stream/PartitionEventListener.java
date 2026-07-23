@@ -21,5 +21,5 @@ public interface PartitionEventListener {
 
     boolean onStuckPartition(String token) throws InterruptedException;
 
-    void onWindowAdvanced(Partition partition, Timestamp windowEnd) throws InterruptedException;
+    void onWindowAdvanced(Partition partition, Timestamp windowEnd, String lastBoundaryRecordSequence) throws InterruptedException;
 }
