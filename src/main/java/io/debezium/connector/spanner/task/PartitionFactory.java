@@ -89,26 +89,21 @@ public class PartitionFactory {
         Timestamp startTimestamp = partitionState.getStartTimestamp();
         Timestamp processedTimestamp = partitionState.getProcessedTimestamp();
 
-        Timestamp candidate = null;
-
-        if (processedTimestamp != null && processedTimestamp.compareTo(startTimestamp) > 0) {
-            candidate = processedTimestamp;
-        }
-
-        if (offset != null) {
-            if (offset.compareTo(startTimestamp) < 0) {
-                LOGGER.warn("Incorrect offset {}, ignoring for partition {}", offset, partitionState.getToken());
-            }
-            else if (candidate == null || offset.compareTo(candidate) > 0) {
-                candidate = offset;
-            }
+        if (offset != null && offset.compareTo(startTimestamp) < 0) {
+            LOGGER.warn("Incorrect offset {}, ignoring for partition {}", offset, partitionState.getToken());
+            offset = null;
         }
 
         Timestamp startTime;
-        if (candidate != null) {
-            LOGGER.info("Resuming partition {} from {} (processedTimestamp={}, offset={})",
-                    partitionState.getToken(), candidate, processedTimestamp, offset);
-            startTime = candidate;
+        if (offset != null) {
+            startTime = offset;
+            LOGGER.info("Resuming partition {} from committed offset {} (processedTimestamp={})",
+                    partitionState.getToken(), offset, processedTimestamp);
+        }
+        else if (processedTimestamp != null && processedTimestamp.compareTo(startTimestamp) > 0) {
+            LOGGER.info("Resuming partition {} from processedTimestamp {} (no committed offset found)",
+                    partitionState.getToken(), processedTimestamp);
+            startTime = processedTimestamp;
         }
         else {
             LOGGER.info("No previous offset found, using startTimestamp {} for partition {}",
