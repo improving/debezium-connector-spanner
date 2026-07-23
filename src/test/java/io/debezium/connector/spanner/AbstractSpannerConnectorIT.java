@@ -5,6 +5,14 @@
  */
 package io.debezium.connector.spanner;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.regex.Pattern;
+
+import org.apache.kafka.connect.source.SourceConnector;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 
@@ -12,11 +20,30 @@ import io.debezium.config.Configuration;
 import io.debezium.connector.spanner.config.BaseSpannerConnectorConfig;
 import io.debezium.connector.spanner.util.Connection;
 import io.debezium.connector.spanner.util.Database;
+import io.debezium.connector.spanner.util.KafkaConnectRestClient;
 import io.debezium.connector.spanner.util.KafkaEnvironment;
+import io.debezium.connector.spanner.util.RealModeRecordPoller;
 import io.debezium.embedded.async.AbstractAsyncEngineConnectorTest;
+import io.debezium.function.BooleanConsumer;
 import io.debezium.util.Testing;
 
 public class AbstractSpannerConnectorIT extends AbstractAsyncEngineConnectorTest {
+
+    /**
+     * System property consumed to switch between the embedded engine (default) and a real,
+     * dockerized Kafka Connect worker, set to {@code real} by the {@code real-connect} Maven
+     * profile. See {@code openspec/changes/spanner-real-kafka-connect-testing}.
+     */
+    private static final String KAFKA_CONNECT_MODE_PROPERTY = "debezium.test.kafka-connect.mode";
+    private static final String REAL_MODE = "real";
+
+    private static final String REAL_MODE_CONNECT_REST_URL = "http://localhost:8083";
+    private static final String DEFAULT_REAL_MODE_CONNECTOR_NAME = "testing-connector";
+    private static final Pattern REAL_MODE_TOPIC_PATTERN = Pattern.compile("^testing-connector\\..*$");
+
+    private static KafkaConnectRestClient connectRestClient;
+    private static RealModeRecordPoller realModePoller;
+    private static String activeRealModeConnectorName;
 
     private static final KafkaEnvironment KAFKA_ENVIRONMENT = new KafkaEnvironment(
             KafkaEnvironment.DOCKER_COMPOSE_FILE);
@@ -40,11 +67,11 @@ public class AbstractSpannerConnectorIT extends AbstractAsyncEngineConnectorTest
                 .with("gcp.spanner.instance.id", database.getInstanceId())
                 .with("gcp.spanner.project.id", database.getProjectId())
                 .with("gcp.spanner.database.id", database.getDatabaseId())
-                .with("gcp.spanner.emulator.host", "http://localhost:9010")
+                .with("gcp.spanner.emulator.host", emulatorHostForConnector())
                 .with("offset.storage", "org.apache.kafka.connect.storage.MemoryOffsetBackingStore")
-                .with("connector.spanner.sync.kafka.bootstrap.servers", KAFKA_ENVIRONMENT.kafkaBrokerApiOn().getAddress())
-                .with("internal.schema.history.kafka.bootstrap.servers", KAFKA_ENVIRONMENT.kafkaBrokerApiOn().getAddress())
-                .with("bootstrap.servers", KAFKA_ENVIRONMENT.kafkaBrokerApiOn().getAddress())
+                .with("connector.spanner.sync.kafka.bootstrap.servers", kafkaBootstrapServersForConnector())
+                .with("internal.schema.history.kafka.bootstrap.servers", kafkaBootstrapServersForConnector())
+                .with("bootstrap.servers", kafkaBootstrapServersForConnector())
                 .with("heartbeat.interval.ms", "300000")
                 .with("gcp.spanner.low-watermark.enabled", false)
                 .with("tasks.max", 3); // see DBZ-8428
@@ -93,5 +120,127 @@ public class AbstractSpannerConnectorIT extends AbstractAsyncEngineConnectorTest
     protected String getTopicName(Configuration config, String tableName) {
         String debeziumConnectorName = "testing-connector";
         return debeziumConnectorName + "." + tableName;
+    }
+
+    private static boolean isRealConnectMode() {
+        return REAL_MODE.equalsIgnoreCase(System.getProperty(KAFKA_CONNECT_MODE_PROPERTY, "embedded"));
+    }
+
+    /**
+     * The Kafka bootstrap address the connector configuration should use: the container-network
+     * address in real mode (the connector runs inside the Kafka Connect worker container), or the
+     * host-mapped address in embedded mode (the connector runs in this JVM).
+     */
+    private static String kafkaBootstrapServersForConnector() {
+        return isRealConnectMode()
+                ? KAFKA_ENVIRONMENT.kafkaBrokerContainerNetworkAddress()
+                : KAFKA_ENVIRONMENT.kafkaBrokerApiOn().getAddress();
+    }
+
+    /**
+     * The Spanner emulator address the connector configuration should use, mirroring
+     * {@link #kafkaBootstrapServersForConnector()}.
+     */
+    private static String emulatorHostForConnector() {
+        return isRealConnectMode() ? Connection.containerNetworkEmulatorHost : Connection.emulatorHost;
+    }
+
+    private static KafkaConnectRestClient connectRestClient() {
+        if (connectRestClient == null) {
+            connectRestClient = new KafkaConnectRestClient(REAL_MODE_CONNECT_REST_URL);
+        }
+        return connectRestClient;
+    }
+
+    /**
+     * Real-mode start: deploys the connector to the dockerized Kafka Connect worker via REST and
+     * starts a background consumer poller feeding {@code consumedLines}, instead of the embedded
+     * engine. Falls back to {@code super} in embedded mode (default).
+     *
+     * Note: only this two-argument overload (used by all {@code *IT.java} start/restart flows) is
+     * made mode-aware; the {@code CompletionCallback}-based overload used by
+     * {@code BasicSanityCheckIT}'s config-validation-failure tests continues to run against the
+     * embedded engine even under the {@code real-connect} profile, since real mode's scope here is
+     * successful deploy/stop/restart round trips via the REST API, not per-call validation.
+     */
+    @Override
+    protected void start(Class<? extends SourceConnector> connectorClass, Configuration connectorConfig) {
+        if (!isRealConnectMode()) {
+            super.start(connectorClass, connectorConfig);
+            return;
+        }
+
+        KafkaConnectRestClient client = connectRestClient();
+        client.waitForWorkerReady(KafkaEnvironment.STARTUP_TIMEOUT);
+
+        // Force the connector/topic-prefix name to the fixed DEFAULT_REAL_MODE_CONNECTOR_NAME,
+        // mirroring AbstractConnectorTest's embedded-mode override (EmbeddedEngineConfig.ENGINE_NAME
+        // set to "testing-connector"), so the real topic prefix (BaseSpannerConnectorConfig derives
+        // it from the "name" config) matches getTopicName()'s hardcoded expectation regardless of
+        // whatever "name" the test's connector config carries.
+        Map<String, String> configMap = new HashMap<>(connectorConfig.asMap());
+        configMap.put("connector.class", connectorClass.getName());
+        configMap.put(BaseSpannerConnectorConfig.CONNECTOR_NAME_PROPERTY_NAME, DEFAULT_REAL_MODE_CONNECTOR_NAME);
+
+        client.deployConnector(DEFAULT_REAL_MODE_CONNECTOR_NAME, configMap);
+        client.waitForConnectorRunning(DEFAULT_REAL_MODE_CONNECTOR_NAME, KafkaEnvironment.STARTUP_CONNECTOR_TIMEOUT);
+        activeRealModeConnectorName = DEFAULT_REAL_MODE_CONNECTOR_NAME;
+
+        if (consumedLines == null) {
+            consumedLines = new ArrayBlockingQueue<>(getMaximumEnqueuedRecordCount());
+        }
+        realModePoller = new RealModeRecordPoller(KAFKA_ENVIRONMENT.kafkaBrokerApiOn().getAddress(), REAL_MODE_TOPIC_PATTERN, consumedLines);
+        realModePoller.start();
+    }
+
+    /**
+     * Real-mode stop: removes the connector via REST and stops the record poller. Falls back to
+     * {@code super} in embedded mode (default).
+     */
+    @Override
+    public void stopConnector(BooleanConsumer callback) {
+        if (!isRealConnectMode() || activeRealModeConnectorName == null) {
+            super.stopConnector(callback);
+            return;
+        }
+
+        boolean stoppedSuccessfully = true;
+        try {
+            if (realModePoller != null) {
+                realModePoller.stop();
+                realModePoller = null;
+            }
+            connectRestClient().deleteConnector(activeRealModeConnectorName);
+            connectRestClient().waitForConnectorAbsent(activeRealModeConnectorName, KafkaEnvironment.CONFIGURE_CONNECTOR_TIMEOUT);
+        }
+        catch (RuntimeException e) {
+            stoppedSuccessfully = false;
+            logger.warn("Failed to stop connector '{}' in real mode", activeRealModeConnectorName, e);
+        }
+        finally {
+            activeRealModeConnectorName = null;
+        }
+        if (callback != null) {
+            callback.accept(!stoppedSuccessfully);
+        }
+    }
+
+    @Override
+    protected void assertConnectorIsRunning() {
+        if (!isRealConnectMode()) {
+            super.assertConnectorIsRunning();
+            return;
+        }
+        assertThat(activeRealModeConnectorName != null && connectRestClient().isConnectorRunning(activeRealModeConnectorName)).isTrue();
+    }
+
+    @Override
+    protected void assertConnectorNotRunning() {
+        if (!isRealConnectMode()) {
+            super.assertConnectorNotRunning();
+            return;
+        }
+        boolean running = activeRealModeConnectorName != null && connectRestClient().isConnectorRunning(activeRealModeConnectorName);
+        assertThat(running).isFalse();
     }
 }

@@ -12,8 +12,14 @@ services:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_CONTROLLER_QUORUM_BOOTSTRAP_SERVERS: broker:9093
-      KAFKA_LISTENERS: PLAINTEXT://broker:9092,CONTROLLER://broker:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      # PLAINTEXT_HOST (port 9092, host-mapped) is unchanged from before and remains what
+      # embedded mode's Testcontainers-based clients use, advertised as localhost:9092.
+      # PLAINTEXT (port 29092, container-only, not host-mapped) is new: it's what real mode's
+      # Kafka Connect worker container uses, advertised as broker:29092 so other containers on
+      # the shared Docker network can resolve and reconnect to it (see design.md Decision #4/#6
+      # and KafkaEnvironment.kafkaBrokerContainerNetworkAddress()).
+      KAFKA_LISTENERS: PLAINTEXT://broker:29092,PLAINTEXT_HOST://broker:9092,CONTROLLER://broker:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:29092,PLAINTEXT_HOST://localhost:9092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,CONTROLLER:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
@@ -25,3 +31,14 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_JMX_PORT: 9101
       KAFKA_JMX_HOSTNAME: localhost
+
+# Attaches the broker to the fixed, externally-referenceable Docker network shared with the
+# docker-maven-plugin-managed Spanner emulator (and, under the real-connect profile, the Kafka
+# Connect worker container). The network is created by whichever tool starts first; in the
+# real-connect profile that is docker-maven-plugin's emulator "start" execution, bound to
+# pre-integration-test, which runs before this compose file is brought up during static
+# initialization of AbstractSpannerConnectorIT in the integration-test phase.
+networks:
+  default:
+    external: true
+    name: spanner-connector-it-network

@@ -41,6 +41,15 @@
         <docker.filter>${docker.db},${docker.repository.name}:${docker.tag.name}</docker.filter>
         <docker.skip>false</docker.skip>
         <docker.showLogs>true</docker.showLogs>
+        <!--
+          Fixed Docker network name shared between the Testcontainers-managed Kafka broker
+          (KafkaEnvironment / docker-compose.yml) and the docker-maven-plugin-managed Spanner
+          emulator (and, under the real-connect profile, the Kafka Connect worker). Created by
+          the emulator's docker-maven-plugin "start" execution (pre-integration-test), which runs
+          before the Testcontainers compose environment starts (during static init in the
+          integration-test phase).
+        -->
+        <docker.it.network.name>spanner-connector-it-network</docker.it.network.name>
 
         <publish.descriptorset>false</publish.descriptorset>
     </properties>
@@ -474,11 +483,26 @@
                     <logDate>default</logDate>
                     <verbose>true</verbose>
                     <imagePullPolicy>IfNotPresent</imagePullPolicy>
+                    <!--
+                      The emulator's <network> config (and the real-connect profile's Kafka Connect
+                      worker <network> config) reference a custom network by name; without this,
+                      docker-maven-plugin expects that network to already exist and fails to start.
+                    -->
+                    <autoCreateCustomNetworks>true</autoCreateCustomNetworks>
                     <images>
                         <image>
                             <name>${docker.db}</name>
                             <run>
-                                <namingStrategy>none</namingStrategy>
+                                <!-- namingStrategy is deprecated and, when set (even to "none"), causes
+                                     docker-maven-plugin to ignore containerNamePattern and fall back to its
+                                     default "%n-%i" pattern (e.g. "emulator-1"), which breaks DNS resolution
+                                     by the fixed hostname other containers (the real-connect Connect worker)
+                                     expect. Omit it and rely on containerNamePattern alone. -->
+                                <containerNamePattern>spanner-emulator</containerNamePattern>
+                                <network>
+                                    <mode>custom</mode>
+                                    <name>${docker.it.network.name}</name>
+                                </network>
                                 <ports>
                                     <port>9010:9010</port>
                                     <port>9020:9020</port>
@@ -493,10 +517,18 @@
                                     <log>Cloud Spanner Emulator running.</log>
                                 </wait>
                             </run>
-                            <external>
-                                <type>properties</type>
-                                <mode>override</mode>
-                            </external>
+                            <!-- No <external> properties-based config here: this project doesn't
+                                 define any docker.<alias>.* properties, and this block was found
+                                 to leak (via Maven's own plugin-configuration merge, which unions
+                                 same-position <images><image> elements between the plugin-level
+                                 <configuration> and every <execution>'s own <configuration>) into
+                                 every other docker-maven-plugin execution's resolved image config,
+                                 including the unrelated real-connect profile's Connect worker
+                                 <image>. Its "properties, override" mode then silently drops
+                                 <run><containerNamePattern> before the actual container-creation
+                                 call, causing Docker to fall back to its default "%n-%i" naming
+                                 (e.g. "emulator-1" instead of "spanner-emulator") and breaking
+                                 container-to-container DNS resolution under real-connect mode. -->
                         </image>
                     </images>
                 </configuration>
@@ -782,6 +814,158 @@
                                     <destFile>target/jacoco.exec</destFile>
                                     <!-- Sets the VM argument line used when unit tests are run. -->
                                     <propertyName>surefireArgLine</propertyName>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <profile>
+            <!--
+              Runs the *IT.java integration test suite against a real, dockerized Kafka Connect
+              worker (quay.io/debezium/kafka-spanner-connector) instead of the embedded engine.
+              Plain `mvn verify` never activates this profile, so the default developer workflow
+              starts no extra containers and is otherwise unaffected.
+            -->
+            <id>real-connect</id>
+            <activation>
+                <activeByDefault>false</activeByDefault>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <configuration>
+                            <systemPropertyVariables>
+                                <debezium.test.kafka-connect.mode>real</debezium.test.kafka-connect.mode>
+                            </systemPropertyVariables>
+                        </configuration>
+                    </plugin>
+                    <!--
+                      Starts the Testcontainers-managed Kafka broker's own docker-compose.yml directly
+                      via the docker CLI, ahead of the Connect worker container below, so the broker
+                      already exists by the time the worker's boot-time kafka-ready check runs. See
+                      design.md Decision #6 (Option C). KafkaEnvironment detects real mode and skips its
+                      own ComposeContainer start/stop in that case, so this becomes the sole owner of the
+                      broker's lifecycle under this profile.
+
+                      docker-compose.yml declares its network as external (created by whichever tool
+                      starts first; see docker.it.network.name above). Plugin execution order across
+                      *different* plugins bound to the same Maven phase is not reliable enough to depend
+                      on the emulator's docker-maven-plugin "start" execution (which has
+                      autoCreateCustomNetworks) having already created it, so this execution creates the
+                      network itself (idempotently) before bringing the broker up.
+                    -->
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>start-broker-compose</id>
+                                <phase>pre-integration-test</phase>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
+                                <configuration>
+                                    <executable>sh</executable>
+                                    <arguments>
+                                        <argument>-c</argument>
+                                        <argument>docker network create ${docker.it.network.name} 2>/dev/null; docker compose -f src/test/java/io/debezium/connector/spanner/util/docker-compose.yml up -d</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>stop-broker-compose</id>
+                                <phase>post-integration-test</phase>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
+                                <configuration>
+                                    <executable>docker</executable>
+                                    <arguments>
+                                        <argument>compose</argument>
+                                        <argument>-f</argument>
+                                        <argument>src/test/java/io/debezium/connector/spanner/util/docker-compose.yml</argument>
+                                        <argument>down</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>io.fabric8</groupId>
+                        <artifactId>docker-maven-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>start-real-connect</id>
+                                <phase>pre-integration-test</phase>
+                                <goals>
+                                    <goal>start</goal>
+                                </goals>
+                                <configuration>
+                                    <images>
+                                        <image>
+                                            <name>${docker.repository.name}:${docker.tag.name}</name>
+                                            <run>
+                                                <containerNamePattern>kafka-connect-worker</containerNamePattern>
+                                                <network>
+                                                    <mode>custom</mode>
+                                                    <name>${docker.it.network.name}</name>
+                                                </network>
+                                                <ports>
+                                                    <port>8083:8083</port>
+                                                </ports>
+                                                <env>
+                                                    <!-- Container-network listener (docker-compose.yml's PLAINTEXT, port 29092),
+                                                         not the host-mapped PLAINTEXT_HOST listener (port 9092) embedded mode uses. -->
+                                                    <CONNECT_BOOTSTRAP_SERVERS>broker:29092</CONNECT_BOOTSTRAP_SERVERS>
+                                                    <CONNECT_GROUP_ID>spanner-real-connect-cluster</CONNECT_GROUP_ID>
+                                                    <CONNECT_CONFIG_STORAGE_TOPIC>_connect-configs</CONNECT_CONFIG_STORAGE_TOPIC>
+                                                    <CONNECT_OFFSET_STORAGE_TOPIC>_connect-offsets</CONNECT_OFFSET_STORAGE_TOPIC>
+                                                    <CONNECT_STATUS_STORAGE_TOPIC>_connect-status</CONNECT_STATUS_STORAGE_TOPIC>
+                                                    <CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR>1</CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR>
+                                                    <CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR>1</CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR>
+                                                    <CONNECT_STATUS_STORAGE_REPLICATION_FACTOR>1</CONNECT_STATUS_STORAGE_REPLICATION_FACTOR>
+                                                    <CONNECT_KEY_CONVERTER>org.apache.kafka.connect.json.JsonConverter</CONNECT_KEY_CONVERTER>
+                                                    <CONNECT_VALUE_CONVERTER>org.apache.kafka.connect.json.JsonConverter</CONNECT_VALUE_CONVERTER>
+                                                    <CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE>true</CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE>
+                                                    <CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE>true</CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE>
+                                                    <CONNECT_REST_PORT>8083</CONNECT_REST_PORT>
+                                                    <CONNECT_REST_ADVERTISED_HOST_NAME>kafka-connect-worker</CONNECT_REST_ADVERTISED_HOST_NAME>
+                                                    <CONNECT_PLUGIN_PATH>/usr/share/java</CONNECT_PLUGIN_PATH>
+                                                </env>
+                                                <log>
+                                                    <prefix>kafka-connect-worker</prefix>
+                                                    <enabled>true</enabled>
+                                                    <color>cyan</color>
+                                                </log>
+                                                <wait>
+                                                    <http>
+                                                        <url>http://localhost:8083/connectors</url>
+                                                        <method>GET</method>
+                                                        <status>200</status>
+                                                    </http>
+                                                    <time>120000</time>
+                                                </wait>
+                                            </run>
+                                        </image>
+                                    </images>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>stop-real-connect</id>
+                                <phase>post-integration-test</phase>
+                                <goals>
+                                    <goal>stop</goal>
+                                </goals>
+                                <configuration>
+                                    <images>
+                                        <image>
+                                            <name>${docker.repository.name}:${docker.tag.name}</name>
+                                        </image>
+                                    </images>
                                 </configuration>
                             </execution>
                         </executions>

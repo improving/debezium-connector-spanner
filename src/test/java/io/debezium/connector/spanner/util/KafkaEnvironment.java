@@ -25,6 +25,32 @@ public class KafkaEnvironment {
     private static final String KAFKA_BROKER_SERVICE_NAME = "broker";
     private static final int KAFKA_BROKER_SERVICE_API_PORT = 9092;
 
+    /**
+     * The broker's container-network-only listener port (docker-compose.yml's PLAINTEXT
+     * listener, advertised as {@code broker:29092}), as opposed to {@link
+     * #KAFKA_BROKER_SERVICE_API_PORT}'s host-mapped PLAINTEXT_HOST listener (advertised as
+     * {@code localhost:9092}). A single advertised listener can't correctly serve both
+     * host-mapped clients (embedded mode) and container-network clients (real mode's Connect
+     * worker) at once, since Kafka's protocol handshake returns the advertised address to
+     * reconnect to.
+     */
+    private static final int KAFKA_BROKER_CONTAINER_NETWORK_API_PORT = 29092;
+
+    /**
+     * Mirrors {@code AbstractSpannerConnectorIT}'s mode check (see Task 7.1). In real mode, the
+     * broker is started/stopped externally by the {@code real-connect} profile's {@code
+     * exec-maven-plugin} executions (design.md Decision #6), so {@link #start()}/{@link #stop()}
+     * become no-ops with respect to {@link #composeContainer} and instead expose the same
+     * fixed host-mapped/container-network addresses the broker is known to use.
+     */
+    private static final String KAFKA_CONNECT_MODE_PROPERTY = "debezium.test.kafka-connect.mode";
+    private static final String REAL_MODE = "real";
+    private static final String REAL_MODE_BROKER_HOST = "localhost";
+
+    private static boolean isRealConnectMode() {
+        return REAL_MODE.equalsIgnoreCase(System.getProperty(KAFKA_CONNECT_MODE_PROPERTY, "embedded"));
+    }
+
     public static final Duration STARTUP_TIMEOUT = Duration.ofSeconds(200L);
     public static final Duration STARTUP_CONNECTOR_TIMEOUT = Duration.ofSeconds(600L);
     public static final Duration CONFIGURE_CONNECTOR_TIMEOUT = Duration.ofSeconds(200L);
@@ -48,6 +74,15 @@ public class KafkaEnvironment {
 
     public void start() {
 
+        if (isRealConnectMode()) {
+            // The broker is already up, started externally via `docker compose` by the real-connect
+            // profile's exec-maven-plugin executions (design.md Decision #6). Nothing to start here;
+            // just expose the same fixed host-mapped address docker-compose.yml's port mapping uses.
+            Testing.print("Real connect mode: skipping Kafka broker ComposeContainer start, using externally-managed broker");
+            this.brokerApiOn = KafkaBrokerApi.createKafkaBrokerApiObjectNode(REAL_MODE_BROKER_HOST, KAFKA_BROKER_SERVICE_API_PORT);
+            return;
+        }
+
         Testing.print("Starting Kafka environment");
         this.composeContainer.start();
         ContainerState brokerState = (ContainerState) composeContainer
@@ -59,6 +94,16 @@ public class KafkaEnvironment {
 
     public KafkaBrokerApi<ObjectNode, ObjectNode> kafkaBrokerApiOn() {
         return brokerApiOn;
+    }
+
+    /**
+     * Returns the broker's address as reachable from other containers attached to the shared
+     * Docker network (see {@code docker-compose.yml}'s external network and the docker-maven-plugin
+     * {@code <network>} config), as opposed to {@link #kafkaBrokerApiOn()} which returns the
+     * host-mapped address used by the test JVM's own Kafka clients.
+     */
+    public String kafkaBrokerContainerNetworkAddress() {
+        return KAFKA_BROKER_SERVICE_NAME + ":" + KAFKA_BROKER_CONTAINER_NETWORK_API_PORT;
     }
 
     public boolean isStarted() {
@@ -94,6 +139,11 @@ public class KafkaEnvironment {
     }
 
     public void stop() {
+        if (isRealConnectMode()) {
+            // Broker teardown is handled externally by the real-connect profile's exec-maven-plugin
+            // `docker compose ... down` execution (design.md Decision #6); nothing to do here.
+            return;
+        }
         if (composeContainer != null) {
             composeContainer.stop();
         }

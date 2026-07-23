@@ -48,6 +48,13 @@ public class Connection {
     private final String instanceId;
     private final String databaseId;
     public static final String emulatorHost = "http://localhost:9010";
+    /**
+     * The emulator's address as reachable from other containers attached to the shared Docker
+     * network (see the docker-maven-plugin {@code <network>}/{@code <containerNamePattern>} config
+     * for the emulator image), as opposed to {@link #emulatorHost} which is the host-mapped address
+     * used by the test JVM's own clients.
+     */
+    public static final String containerNetworkEmulatorHost = "http://spanner-emulator:9010";
 
     public DatabaseClient databaseClient;
     private Spanner spanner;

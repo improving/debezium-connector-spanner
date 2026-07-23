@@ -15,6 +15,13 @@ import org.testcontainers.containers.ContainerState;
 
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+/**
+ * Kafka broker connectivity helper. Constructed either from a Testcontainers {@link ContainerState}
+ * (embedded mode, where {@code KafkaEnvironment} manages the broker container directly) or from a
+ * fixed host string (real mode, where the broker is started externally via {@code docker compose}
+ * and this JVM only ever talks to its host-mapped port; see {@code KafkaEnvironment}).
+ */
+
 public class KafkaBrokerApi<K, V> {
 
     protected static final String SCHEMA_REGISTRY_PORT = "8081";
@@ -27,14 +34,14 @@ public class KafkaBrokerApi<K, V> {
 
     public static final int POLL_FIRST_RECORDS_TIMEOUT_MAX_MINUTES = 10;
 
-    private final ContainerState containerState;
+    private final String host;
 
     private final int kafkaPort;
 
     private final Properties properties;
 
-    public KafkaBrokerApi(ContainerState containerState, int kafkaPort, Properties properties) {
-        this.containerState = containerState;
+    public KafkaBrokerApi(String host, int kafkaPort, Properties properties) {
+        this.host = host;
         this.kafkaPort = kafkaPort;
         this.properties = SerializationUtils.clone(properties);
     }
@@ -45,14 +52,23 @@ public class KafkaBrokerApi<K, V> {
 
     public static KafkaBrokerApi<ObjectNode, ObjectNode> createKafkaBrokerApiObjectNode(ContainerState containerState,
                                                                                         int kafkaPort) {
+        return createKafkaBrokerApiObjectNode(containerState.getHost(), kafkaPort);
+    }
+
+    /**
+     * Builds a {@link KafkaBrokerApi} for a fixed host, as opposed to one derived from a Testcontainers
+     * {@link ContainerState}. Used in real mode, where the broker is started externally via
+     * {@code docker compose} rather than through this JVM's Testcontainers {@code ComposeContainer}.
+     */
+    public static KafkaBrokerApi<ObjectNode, ObjectNode> createKafkaBrokerApiObjectNode(String host, int kafkaPort) {
         final Properties props = new Properties();
-        props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, containerState.getHost() + ":" + kafkaPort);
+        props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, host + ":" + kafkaPort);
         props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
-        return new KafkaBrokerApi<>(containerState, kafkaPort, props);
+        return new KafkaBrokerApi<>(host, kafkaPort, props);
     }
 
     public String getAddress() {
-        return containerState.getHost() + ":" + kafkaPort;
+        return host + ":" + kafkaPort;
     }
 
     public AdminClient createAdminClient() {
