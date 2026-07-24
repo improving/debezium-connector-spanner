@@ -190,7 +190,7 @@ public class SpannerChangeStreamService {
             catch (InterruptedException ex) {
                 LOGGER.info("task {}, Interrupting streaming mutable partition task with token {}", this.taskUid, partition.getToken());
                 Thread.currentThread().interrupt();
-                isPartitionEnded = true;
+                break;
             }
 
             if (partitionEndTimestamp != null && processedTimestamp.equals(partitionEndTimestamp)) {
