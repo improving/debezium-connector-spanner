@@ -237,7 +237,12 @@ public class SpannerChangeStreamService {
     }
 
     private Timestamp addMinutes(Timestamp timestamp, Duration duration) {
-        return Timestamp.ofTimeSecondsAndNanos(timestamp.getSeconds() + duration.getSeconds(), timestamp.getNanos());
+        Instant result = Instant.ofEpochSecond(
+                timestamp.getSeconds(),
+                timestamp.getNanos()
+        ).plus(duration);
+
+        return Timestamp.ofTimeSecondsAndNanos(result.getEpochSecond(), result.getNano());
     }
 
     private Timestamp minTimestamp(Timestamp a, Timestamp b) {
