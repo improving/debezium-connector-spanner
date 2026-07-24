@@ -388,12 +388,12 @@ class BaseSpannerConnectorConfigTest {
     }
 
     @Test
-    void testIsMutablePartitionOrderingEnabledDefaultFalse() {
+    void testIsMutablePartitionOrderingEnabledDefaultTrue() {
         Configuration configuration = mock(Configuration.class);
         when(configuration.getString((Field) any())).thenReturn("String");
         when(configuration.getString(anyString())).thenReturn("String");
         when(configuration.asProperties()).thenReturn(new Properties());
-        assertFalse(new SpannerConnectorConfig(configuration).isMutablePartitionOrderingEnabled());
+        assertTrue(new SpannerConnectorConfig(configuration).isMutablePartitionOrderingEnabled());
     }
 
     @Test
@@ -404,7 +404,7 @@ class BaseSpannerConnectorConfigTest {
         ConfigDef.ConfigKey key = configKeys.get("gcp.spanner.mutable.partition.ordering.enabled");
         assertEquals(ConfigDef.Type.BOOLEAN, key.type);
         assertEquals(ConfigDef.Importance.MEDIUM, key.importance);
-        assertEquals(false, key.defaultValue);
+        assertEquals(true, key.defaultValue);
     }
 
     private static Stream<Arguments> mutableWindowMinutesProvider() {

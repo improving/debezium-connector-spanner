@@ -32,6 +32,7 @@ import io.debezium.connector.spanner.db.model.Partition;
 import io.debezium.connector.spanner.db.model.StreamEventMetadata;
 import io.debezium.connector.spanner.db.model.event.FinishPartitionEvent;
 import io.debezium.connector.spanner.db.model.event.PartitionEndEvent;
+import io.debezium.connector.spanner.db.model.event.PartitionEventEvent;
 import io.debezium.connector.spanner.metrics.MetricsEventPublisher;
 
 class SpannerChangeStreamServiceTest {
@@ -241,6 +242,41 @@ class SpannerChangeStreamServiceTest {
 
         verify(consumer, org.mockito.Mockito.times(1)).acceptChangeStreamEvent(
                 org.mockito.ArgumentMatchers.eq(eventAtBoundary));
+    }
+
+    @Test
+    void testGetEventsMutablePausesOnMoveInEvent() throws Exception {
+        ChangeStreamDao changeStreamDao = mock(ChangeStreamDao.class);
+        ChangeStreamResultSet resultSet = mock(ChangeStreamResultSet.class);
+        ChangeStreamRecordMapper mapper = mock(ChangeStreamRecordMapper.class);
+        MetricsEventPublisher metricsEventPublisher = mock(MetricsEventPublisher.class);
+
+        when(changeStreamDao.isMutableKeyRange()).thenReturn(true);
+        when(changeStreamDao.streamQuery(any(), any(), any(), anyLong())).thenReturn(resultSet);
+        when(resultSet.next()).thenReturn(true, false);
+
+        Timestamp start = Timestamp.ofTimeSecondsAndNanos(0, 0);
+        Timestamp commitTimestamp = Timestamp.ofTimeSecondsAndNanos(600, 0);
+        StreamEventMetadata meta = StreamEventMetadata.newBuilder().withPartitionToken("dst").build();
+        PartitionEventEvent moveInEvent = new PartitionEventEvent(
+                commitTimestamp, "00001", "dst", List.of("src1"), List.of(), meta);
+        when(mapper.toChangeStreamEvents(any(), any(), any())).thenReturn(List.of(moveInEvent));
+
+        SpannerChangeStreamService service = new SpannerChangeStreamService(
+                "TaskUid", changeStreamDao, mapper, Duration.ofMillis(1000), metricsEventPublisher);
+
+        Partition partition = new Partition("dst", new HashSet<>(), start, null, "origin");
+
+        ChangeStreamEventConsumer consumer = mock(ChangeStreamEventConsumer.class);
+        PartitionEventListener listener = mock(PartitionEventListener.class);
+        doNothing().when(listener).onRun(any());
+
+        service.getEvents(partition, consumer, listener);
+
+        verify(listener).onMoveIn(partition, commitTimestamp, "00001", List.of("src1"));
+        verify(listener, org.mockito.Mockito.never()).onFinish(any());
+        verify(consumer, org.mockito.Mockito.never()).acceptChangeStreamEvent(any(FinishPartitionEvent.class));
+        verify(consumer).acceptChangeStreamEvent(moveInEvent);
     }
 
     @Test

@@ -25,6 +25,7 @@ import io.debezium.connector.spanner.db.model.event.ChildPartitionsEvent;
 import io.debezium.connector.spanner.db.model.event.FinishPartitionEvent;
 import io.debezium.connector.spanner.db.model.event.HeartbeatEvent;
 import io.debezium.connector.spanner.db.model.event.PartitionEndEvent;
+import io.debezium.connector.spanner.db.model.event.PartitionEventEvent;
 import io.debezium.connector.spanner.metrics.MetricsEventPublisher;
 import io.debezium.connector.spanner.metrics.event.DelayChangeStreamEventsMetricEvent;
 
@@ -135,8 +136,11 @@ public class SpannerChangeStreamService {
         Timestamp processedTimestamp = partition.getStartTimestamp();
         String lastBoundaryRecordSequence = partition.getLastBoundaryRecordSequence();
         boolean isPartitionEnded = false;
+        boolean isPartitionMoveInEvent = false;
+        PartitionEventEvent moveInEvent = null;
 
-        while (!isPartitionEnded && (partitionEndTimestamp == null || isBeforeOrEqual(processedTimestamp, partitionEndTimestamp))) {
+        while (!isPartitionEnded && !isPartitionMoveInEvent
+                && (partitionEndTimestamp == null || isBeforeOrEqual(processedTimestamp, partitionEndTimestamp))) {
             Timestamp endTimestamp = partitionEndTimestamp == null
                     ? addMinutes(processedTimestamp, windowDuration)
                     : minTimestamp(partitionEndTimestamp, addMinutes(processedTimestamp, windowDuration));
@@ -178,10 +182,21 @@ public class SpannerChangeStreamService {
                         if (event instanceof PartitionEndEvent) {
                             isPartitionEnded = true;
                         }
+                        if (event instanceof PartitionEventEvent) {
+                            PartitionEventEvent partitionEventEvent = (PartitionEventEvent) event;
+                            if (!partitionEventEvent.getSourcePartitions().isEmpty()) {
+                                isPartitionMoveInEvent = true;
+                                moveInEvent = partitionEventEvent;
+                            }
+                        }
                     }
 
                     if (!events.isEmpty() && !(events.get(0) instanceof HeartbeatEvent)) {
                         metricsEventPublisher.publishMetricEvent(new DelayChangeStreamEventsMetricEvent((int) delay));
+                    }
+
+                    if (isPartitionMoveInEvent) {
+                        break;
                     }
 
                     start = now();
@@ -190,6 +205,10 @@ public class SpannerChangeStreamService {
             catch (InterruptedException ex) {
                 LOGGER.info("task {}, Interrupting streaming mutable partition task with token {}", this.taskUid, partition.getToken());
                 Thread.currentThread().interrupt();
+                break;
+            }
+
+            if (isPartitionMoveInEvent) {
                 break;
             }
 
@@ -203,6 +222,13 @@ public class SpannerChangeStreamService {
             lastBoundaryRecordSequence = newBoundaryRecordSequence;
             processedTimestamp = endTimestamp;
             partitionEventListener.onWindowAdvanced(partition, processedTimestamp, lastBoundaryRecordSequence);
+        }
+
+        if (isPartitionMoveInEvent && moveInEvent != null) {
+            LOGGER.info("Task {}, Pausing mutable partition {} after MoveIn event at {}, seq {}, sources {}",
+                    taskUid, partition, moveInEvent.getCommitTimestamp(), moveInEvent.getRecordSequence(), moveInEvent.getSourcePartitions());
+            partitionEventListener.onMoveIn(partition, moveInEvent.getCommitTimestamp(), moveInEvent.getRecordSequence(), moveInEvent.getSourcePartitions());
+            return;
         }
 
         partitionEventListener.onFinish(partition);
@@ -239,8 +265,7 @@ public class SpannerChangeStreamService {
     private Timestamp addMinutes(Timestamp timestamp, Duration duration) {
         Instant result = Instant.ofEpochSecond(
                 timestamp.getSeconds(),
-                timestamp.getNanos()
-        ).plus(duration);
+                timestamp.getNanos()).plus(duration);
 
         return Timestamp.ofTimeSecondsAndNanos(result.getEpochSecond(), result.getNano());
     }

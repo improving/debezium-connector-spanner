@@ -13,6 +13,10 @@ import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.google.cloud.Timestamp;
+
+import io.debezium.connector.spanner.kafka.internal.model.MoveInState;
+import io.debezium.connector.spanner.kafka.internal.model.MoveOutState;
 import io.debezium.connector.spanner.kafka.internal.model.PartitionState;
 import io.debezium.connector.spanner.kafka.internal.model.PartitionStateEnum;
 import io.debezium.connector.spanner.kafka.internal.model.TaskState;
@@ -22,6 +26,7 @@ import io.debezium.connector.spanner.task.TaskSyncContext;
  * Checks what partitions are ready for streaming
  */
 public class FindPartitionForStreamingOperation implements Operation {
+
     private static final Logger LOGGER = LoggerFactory.getLogger(FindPartitionForStreamingOperation.class);
 
     private boolean isRequiredPublishSyncEvent = false;
@@ -39,7 +44,18 @@ public class FindPartitionForStreamingOperation implements Operation {
                     if (partitionState.getState().equals(PartitionStateEnum.CREATED)) {
                         boolean takePartitionForStreaming = false;
                         LOGGER.debug("Task sees partition with CREATED state, task Uid {}, partition {}", taskSyncContext.getTaskUid(), partitionState);
-                        if (finishedPartitions.containsAll(partitionState.getParents())) {
+                        if (partitionState.getMoveInState() != null) {
+                            if (canDestPartitionContinue(taskSyncContext, partitionState)) {
+                                LOGGER.info("Task takes MoveIn partition for streaming, source(s) processed MoveOut, taskUid: {}, partition {}",
+                                        taskSyncContext.getTaskUid(), partitionState.getToken());
+                                takePartitionForStreaming = true;
+                            }
+                            else {
+                                LOGGER.info("Task not taking MoveIn partition for streaming, waiting for source(s) MoveOut, taskUid: {}, partition {}, sources {}",
+                                        taskSyncContext.getTaskUid(), partitionState.getToken(), partitionState.getParents());
+                            }
+                        }
+                        else if (finishedPartitions.containsAll(partitionState.getParents())) {
                             takePartitionForStreaming = true;
                             LOGGER.info("Task takes partition for streaming, taskUid: {}, partition {}",
                                     taskSyncContext.getTaskUid(), partitionState.getToken());
@@ -105,6 +121,60 @@ public class FindPartitionForStreamingOperation implements Operation {
         return partitionStateList.stream()
                 .map(PartitionState::getToken)
                 .collect(Collectors.toSet());
+    }
+
+    /**
+     * Determines whether a destination partition that is paused after processing a MoveIn
+     * event can resume streaming. This requires that every source partition referenced in the
+     * destination's {@link MoveInState} has published a {@link MoveOutState} that is at or past
+     * the MoveIn commit timestamp, and, if exactly at that timestamp, includes this destination
+     * partition among its recorded destinations.
+     */
+    private boolean canDestPartitionContinue(TaskSyncContext taskSyncContext, PartitionState destPartition) {
+        MoveInState moveInState = destPartition.getMoveInState();
+        Timestamp moveInTimestamp = moveInState.getTimestamp();
+        String destToken = destPartition.getToken();
+
+        for (String sourceToken : moveInState.getSourcePartitionTokens()) {
+            MoveOutState sourceMoveOutState = findMoveOutState(taskSyncContext, sourceToken);
+            if (sourceMoveOutState == null) {
+                return false;
+            }
+            int cmp = sourceMoveOutState.getTimestamp().compareTo(moveInTimestamp);
+            if (cmp < 0) {
+                return false;
+            }
+            else if (cmp == 0 && !sourceMoveOutState.getDestPartitionTokens().contains(destToken)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private MoveOutState findMoveOutState(TaskSyncContext taskSyncContext, String token) {
+        for (PartitionState partitionState : taskSyncContext.getCurrentTaskState().getPartitions()) {
+            if (partitionState.getToken().equals(token)) {
+                return partitionState.getMoveOutState();
+            }
+        }
+        for (PartitionState partitionState : taskSyncContext.getCurrentTaskState().getSharedPartitions()) {
+            if (partitionState.getToken().equals(token)) {
+                return partitionState.getMoveOutState();
+            }
+        }
+        for (TaskState taskState : taskSyncContext.getTaskStates().values()) {
+            for (PartitionState partitionState : taskState.getPartitions()) {
+                if (partitionState.getToken().equals(token)) {
+                    return partitionState.getMoveOutState();
+                }
+            }
+            for (PartitionState partitionState : taskState.getSharedPartitions()) {
+                if (partitionState.getToken().equals(token)) {
+                    return partitionState.getMoveOutState();
+                }
+            }
+        }
+        return null;
     }
 
     private boolean atLeastOneParentExists(TaskSyncContext taskSyncContext, Set<String> parents) {
