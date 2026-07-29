@@ -35,7 +35,6 @@ public class FindPartitionForStreamingOperation implements Operation {
     }
 
     private TaskSyncContext takePartitionForStreaming(TaskSyncContext taskSyncContext) {
-        Set<String> allPartitions = getAllPartitions(taskSyncContext);
         Set<String> finishedPartitions = getFinishedPartitions(taskSyncContext);
 
         TaskState taskState = taskSyncContext.getCurrentTaskState();
@@ -45,7 +44,7 @@ public class FindPartitionForStreamingOperation implements Operation {
                         boolean takePartitionForStreaming = false;
                         LOGGER.debug("Task sees partition with CREATED state, task Uid {}, partition {}", taskSyncContext.getTaskUid(), partitionState);
                         if (partitionState.getMoveInState() != null) {
-                            if (canDestPartitionContinue(taskSyncContext, partitionState)) {
+                            if (canDestPartitionContinue(taskSyncContext, partitionState, finishedPartitions)) {
                                 LOGGER.info("Task takes MoveIn partition for streaming, source(s) processed MoveOut, taskUid: {}, partition {}",
                                         taskSyncContext.getTaskUid(), partitionState.getToken());
                                 takePartitionForStreaming = true;
@@ -105,32 +104,21 @@ public class FindPartitionForStreamingOperation implements Operation {
                 .collect(Collectors.toSet());
     }
 
-    private Set<String> getAllPartitions(TaskSyncContext taskSyncContext) {
-        List<PartitionState> partitionStateList = new ArrayList<>();
-        // add all owned partitions
-        partitionStateList.addAll(taskSyncContext.getCurrentTaskState().getPartitions());
-        partitionStateList.addAll(taskSyncContext.getTaskStates().values().stream()
-                .flatMap(taskState -> taskState.getPartitions().stream())
-                .collect(Collectors.toList()));
-
-        // add all shared parttions.
-        partitionStateList.addAll(taskSyncContext.getCurrentTaskState().getSharedPartitions());
-        partitionStateList.addAll(taskSyncContext.getTaskStates().values().stream()
-                .flatMap(taskState -> taskState.getSharedPartitions().stream())
-                .collect(Collectors.toList()));
-        return partitionStateList.stream()
-                .map(PartitionState::getToken)
-                .collect(Collectors.toSet());
-    }
-
     /**
      * Determines whether a destination partition that is paused after processing a MoveIn
      * event can resume streaming. This requires that every source partition referenced in the
      * destination's {@link MoveInState} has published a {@link MoveOutState} that is at or past
      * the MoveIn commit timestamp, and, if exactly at that timestamp, includes this destination
      * partition among its recorded destinations.
+     *
+     * <p>Source partitions that have reached {@code FINISHED}/{@code REMOVED} are purged from
+     * the task state (see {@link RemoveFinishedPartitionOperation}) and so no longer carry their
+     * {@link MoveOutState}. A source can only reach that state after streaming past every
+     * boundary in its key range, including any MoveOut it is a party to, so a source found in
+     * {@code finishedPartitions} is treated as having already satisfied this destination's wait
+     * condition, rather than deadlocking forever waiting on a purged {@link MoveOutState}.
      */
-    private boolean canDestPartitionContinue(TaskSyncContext taskSyncContext, PartitionState destPartition) {
+    private boolean canDestPartitionContinue(TaskSyncContext taskSyncContext, PartitionState destPartition, Set<String> finishedPartitions) {
         MoveInState moveInState = destPartition.getMoveInState();
         Timestamp moveInTimestamp = moveInState.getTimestamp();
         String destToken = destPartition.getToken();
@@ -138,6 +126,11 @@ public class FindPartitionForStreamingOperation implements Operation {
         for (String sourceToken : moveInState.getSourcePartitionTokens()) {
             MoveOutState sourceMoveOutState = findMoveOutState(taskSyncContext, sourceToken);
             if (sourceMoveOutState == null) {
+                if (finishedPartitions.contains(sourceToken)) {
+                    LOGGER.info("Task {}, source partition {} already finished and purged, treating MoveOut as satisfied for destination {}",
+                            taskSyncContext.getTaskUid(), sourceToken, destToken);
+                    continue;
+                }
                 return false;
             }
             int cmp = sourceMoveOutState.getTimestamp().compareTo(moveInTimestamp);

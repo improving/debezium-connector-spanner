@@ -215,6 +215,22 @@ class FindPartitionForStreamingOperationTest {
         assertEquals(PartitionStateEnum.READY_FOR_STREAMING, partitionState(result, "dst").getState());
     }
 
+    @Test
+    void sourceFinishedAndPurged_destPartitionReady() {
+        PartitionState dest = destPartition("dst", "src1");
+        PartitionState finishedSource = PartitionState.builder()
+                .token("src1")
+                .state(PartitionStateEnum.FINISHED)
+                .parents(Set.of())
+                .finishedTimestamp(AFTER_MOVE_IN_TS)
+                .build();
+        TaskSyncContext context = contextWith(dest, finishedSource);
+
+        TaskSyncContext result = new FindPartitionForStreamingOperation().doOperation(context);
+
+        assertEquals(PartitionStateEnum.READY_FOR_STREAMING, partitionState(result, "dst").getState());
+    }
+
     private PartitionState partitionState(TaskSyncContext context, String token) {
         return context.getCurrentTaskState().getPartitions().stream()
                 .filter(p -> p.getToken().equals(token))

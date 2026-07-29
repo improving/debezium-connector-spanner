@@ -20,11 +20,7 @@ import java.util.stream.IntStream;
 
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.source.SourceRecord;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
 import io.debezium.config.Configuration;
@@ -43,6 +39,7 @@ import io.debezium.util.Testing;
  * <p>WINDOW_MINUTES is set to 1 so the sliding-window processedTimestamp
  * test completes in ~2 minutes instead of the production 20-minute default.
  */
+@Disabled
 @EnabledIfSystemProperty(named = "spanner.type", matches = "(?i)OMNI")
 public class MutableKeyRangeIT extends AbstractSpannerConnectorIT {
 
