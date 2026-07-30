@@ -44,6 +44,7 @@ public class SpannerChangeStreamService {
     private final MetricsEventPublisher metricsEventPublisher;
     private final String taskUid;
     private final Duration windowDuration;
+    private final boolean mutablePartitionOrderingEnabled;
 
     public SpannerChangeStreamService(String taskUid, ChangeStreamDao changeStreamDao, ChangeStreamRecordMapper changeStreamRecordMapper,
                                       Duration heartbeatMillis, MetricsEventPublisher metricsEventPublisher) {
@@ -52,12 +53,19 @@ public class SpannerChangeStreamService {
 
     public SpannerChangeStreamService(String taskUid, ChangeStreamDao changeStreamDao, ChangeStreamRecordMapper changeStreamRecordMapper,
                                       Duration heartbeatMillis, MetricsEventPublisher metricsEventPublisher, int windowMinutes) {
+        this(taskUid, changeStreamDao, changeStreamRecordMapper, heartbeatMillis, metricsEventPublisher, windowMinutes, true);
+    }
+
+    public SpannerChangeStreamService(String taskUid, ChangeStreamDao changeStreamDao, ChangeStreamRecordMapper changeStreamRecordMapper,
+                                      Duration heartbeatMillis, MetricsEventPublisher metricsEventPublisher, int windowMinutes,
+                                      boolean mutablePartitionOrderingEnabled) {
         this.changeStreamDao = changeStreamDao;
         this.changeStreamRecordMapper = changeStreamRecordMapper;
         this.heartbeatMillis = heartbeatMillis;
         this.metricsEventPublisher = metricsEventPublisher;
         this.taskUid = taskUid;
         this.windowDuration = Duration.ofMinutes(windowMinutes);
+        this.mutablePartitionOrderingEnabled = mutablePartitionOrderingEnabled;
     }
 
     public void getEvents(Partition partition, ChangeStreamEventConsumer changeStreamEventConsumer,
@@ -182,7 +190,7 @@ public class SpannerChangeStreamService {
                         if (event instanceof PartitionEndEvent) {
                             isPartitionEnded = true;
                         }
-                        if (event instanceof PartitionEventEvent) {
+                        if (event instanceof PartitionEventEvent && mutablePartitionOrderingEnabled) {
                             PartitionEventEvent partitionEventEvent = (PartitionEventEvent) event;
                             if (!partitionEventEvent.getSourcePartitions().isEmpty()) {
                                 isPartitionMoveInEvent = true;

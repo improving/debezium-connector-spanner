@@ -280,6 +280,41 @@ class SpannerChangeStreamServiceTest {
     }
 
     @Test
+    void testGetEventsMutableIgnoresMoveInEventWhenOrderingDisabled() throws Exception {
+        ChangeStreamDao changeStreamDao = mock(ChangeStreamDao.class);
+        ChangeStreamResultSet resultSet = mock(ChangeStreamResultSet.class);
+        ChangeStreamRecordMapper mapper = mock(ChangeStreamRecordMapper.class);
+        MetricsEventPublisher metricsEventPublisher = mock(MetricsEventPublisher.class);
+
+        when(changeStreamDao.isMutableKeyRange()).thenReturn(true);
+        when(changeStreamDao.streamQuery(any(), any(), any(), anyLong())).thenReturn(resultSet);
+        when(resultSet.next()).thenReturn(true, false);
+
+        Timestamp start = Timestamp.ofTimeSecondsAndNanos(0, 0);
+        Timestamp commitTimestamp = Timestamp.ofTimeSecondsAndNanos(600, 0);
+        StreamEventMetadata meta = StreamEventMetadata.newBuilder().withPartitionToken("dst").build();
+        PartitionEventEvent moveInEvent = new PartitionEventEvent(
+                commitTimestamp, "00001", "dst", List.of("src1"), List.of(), meta);
+        when(mapper.toChangeStreamEvents(any(), any(), any())).thenReturn(List.of(moveInEvent));
+
+        SpannerChangeStreamService service = new SpannerChangeStreamService(
+                "TaskUid", changeStreamDao, mapper, Duration.ofMillis(1000), metricsEventPublisher, 20, false);
+
+        Partition partition = new Partition("dst", new HashSet<>(), start, start, "origin");
+
+        ChangeStreamEventConsumer consumer = mock(ChangeStreamEventConsumer.class);
+        PartitionEventListener listener = mock(PartitionEventListener.class);
+        doNothing().when(listener).onRun(any());
+
+        service.getEvents(partition, consumer, listener);
+
+        verify(listener, org.mockito.Mockito.never()).onMoveIn(any(), any(), any(), any());
+        verify(listener).onFinish(partition);
+        verify(consumer).acceptChangeStreamEvent(any(FinishPartitionEvent.class));
+        verify(consumer).acceptChangeStreamEvent(moveInEvent);
+    }
+
+    @Test
     void testGetEventsImmutablePathUsedWhenNotMutable() throws Exception {
         ChangeStreamDao changeStreamDao = mock(ChangeStreamDao.class);
         ChangeStreamResultSet resultSet = mock(ChangeStreamResultSet.class);
