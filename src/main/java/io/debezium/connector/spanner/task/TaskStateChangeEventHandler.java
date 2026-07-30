@@ -132,8 +132,11 @@ public class TaskStateChangeEventHandler {
     }
 
     private void processEvent(MoveOutNotificationEvent event) throws InterruptedException {
-        performOperation(new MoveOutStateUpdateOperation(
-                event.getToken(), event.getCommitTimestamp(), event.getDestinationTokens()));
+        performOperation(
+                new MoveOutStateUpdateOperation(
+                        event.getToken(), event.getCommitTimestamp(), event.getDestinationTokens()),
+                new FindPartitionForStreamingOperation(),
+                new TakePartitionForStreamingOperation(changeStream, partitionFactory));
     }
 
     private void processEvent(MoveInNotificationEvent event) throws InterruptedException {
