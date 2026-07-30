@@ -117,6 +117,17 @@ public class FindPartitionForStreamingOperation implements Operation {
      * boundary in its key range, including any MoveOut it is a party to, so a source found in
      * {@code finishedPartitions} is treated as having already satisfied this destination's wait
      * condition, rather than deadlocking forever waiting on a purged {@link MoveOutState}.
+     *
+     * <p>A source can also be missing its {@link MoveOutState} because a task crashed after the
+     * source's own change stream query had already read past the MoveIn commit timestamp, but
+     * before the resulting {@code MoveOutStateUpdateOperation} update was persisted to the sync
+     * topic. On restart, the source resumes from its persisted offset - which is already past
+     * that timestamp - so it will never re-read (and therefore never re-emit) that boundary
+     * record again, and {@code moveOutState} would otherwise stay {@code null} forever. If the
+     * source's own {@code processedTimestamp} is already strictly past the MoveIn timestamp, its
+     * change stream has necessarily already read through that boundary for real (Spanner change
+     * streams deliver records in commit-timestamp order), so it is safe to treat the MoveOut as
+     * satisfied despite the missing local bookkeeping.
      */
     private boolean canDestPartitionContinue(TaskSyncContext taskSyncContext, PartitionState destPartition, Set<String> finishedPartitions) {
         MoveInState moveInState = destPartition.getMoveInState();
@@ -129,6 +140,15 @@ public class FindPartitionForStreamingOperation implements Operation {
                 if (finishedPartitions.contains(sourceToken)) {
                     LOGGER.info("Task {}, source partition {} already finished and purged, treating MoveOut as satisfied for destination {}",
                             taskSyncContext.getTaskUid(), sourceToken, destToken);
+                    continue;
+                }
+                PartitionState sourceState = findPartitionState(taskSyncContext, sourceToken);
+                if (sourceState != null && sourceState.getProcessedTimestamp() != null
+                        && sourceState.getProcessedTimestamp().compareTo(moveInTimestamp) > 0) {
+                    LOGGER.info(
+                            "Task {}, source partition {} already streamed past MoveIn timestamp {} (processedTimestamp={}) despite missing MoveOutState "
+                                    + "(likely lost in a crash before it was persisted), treating MoveOut as satisfied for destination {}",
+                            taskSyncContext.getTaskUid(), sourceToken, moveInTimestamp, sourceState.getProcessedTimestamp(), destToken);
                     continue;
                 }
                 return false;
@@ -145,25 +165,30 @@ public class FindPartitionForStreamingOperation implements Operation {
     }
 
     private MoveOutState findMoveOutState(TaskSyncContext taskSyncContext, String token) {
+        PartitionState partitionState = findPartitionState(taskSyncContext, token);
+        return partitionState == null ? null : partitionState.getMoveOutState();
+    }
+
+    private PartitionState findPartitionState(TaskSyncContext taskSyncContext, String token) {
         for (PartitionState partitionState : taskSyncContext.getCurrentTaskState().getPartitions()) {
             if (partitionState.getToken().equals(token)) {
-                return partitionState.getMoveOutState();
+                return partitionState;
             }
         }
         for (PartitionState partitionState : taskSyncContext.getCurrentTaskState().getSharedPartitions()) {
             if (partitionState.getToken().equals(token)) {
-                return partitionState.getMoveOutState();
+                return partitionState;
             }
         }
         for (TaskState taskState : taskSyncContext.getTaskStates().values()) {
             for (PartitionState partitionState : taskState.getPartitions()) {
                 if (partitionState.getToken().equals(token)) {
-                    return partitionState.getMoveOutState();
+                    return partitionState;
                 }
             }
             for (PartitionState partitionState : taskState.getSharedPartitions()) {
                 if (partitionState.getToken().equals(token)) {
-                    return partitionState.getMoveOutState();
+                    return partitionState;
                 }
             }
         }

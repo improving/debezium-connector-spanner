@@ -231,6 +231,65 @@ class FindPartitionForStreamingOperationTest {
         assertEquals(PartitionStateEnum.READY_FOR_STREAMING, partitionState(result, "dst").getState());
     }
 
+    /**
+     * Regression test for review comment 7: a task crashed after the source's own change stream
+     * had already read past the MoveIn timestamp, but before MoveOutStateUpdateOperation's
+     * update was persisted to the sync topic. On restart the source resumes from its persisted
+     * processedTimestamp (already past the MoveIn timestamp) and will never re-emit that
+     * boundary, so moveOutState stays null forever - but processedTimestamp alone proves the
+     * source already streamed past the point in question, so the destination must not deadlock.
+     */
+    @Test
+    void sourceMissingMoveOutButAlreadyStreamedPastMoveInTimestamp_destPartitionReady() {
+        PartitionState dest = destPartition("dst", "src1");
+        PartitionState source = PartitionState.builder()
+                .token("src1")
+                .state(PartitionStateEnum.RUNNING)
+                .parents(Set.of())
+                .processedTimestamp(AFTER_MOVE_IN_TS)
+                .build();
+        TaskSyncContext context = contextWith(dest, source);
+
+        TaskSyncContext result = new FindPartitionForStreamingOperation().doOperation(context);
+
+        assertEquals(PartitionStateEnum.READY_FOR_STREAMING, partitionState(result, "dst").getState());
+    }
+
+    @Test
+    void sourceMissingMoveOutAndNotYetPastMoveInTimestamp_destPartitionStillBlocked() {
+        PartitionState dest = destPartition("dst", "src1");
+        PartitionState source = PartitionState.builder()
+                .token("src1")
+                .state(PartitionStateEnum.RUNNING)
+                .parents(Set.of())
+                .processedTimestamp(BEFORE_MOVE_IN_TS)
+                .build();
+        TaskSyncContext context = contextWith(dest, source);
+
+        TaskSyncContext result = new FindPartitionForStreamingOperation().doOperation(context);
+
+        assertEquals(PartitionStateEnum.CREATED, partitionState(result, "dst").getState(),
+                "source hasn't actually reached the MoveIn timestamp yet - must still block");
+    }
+
+    @Test
+    void sourceMissingMoveOutAndExactlyAtMoveInTimestamp_destPartitionStillBlocked() {
+        // Strictly greater-than is required: at the exact timestamp the source may not have
+        // fully processed every record at that instant yet.
+        PartitionState dest = destPartition("dst", "src1");
+        PartitionState source = PartitionState.builder()
+                .token("src1")
+                .state(PartitionStateEnum.RUNNING)
+                .parents(Set.of())
+                .processedTimestamp(MOVE_IN_TS)
+                .build();
+        TaskSyncContext context = contextWith(dest, source);
+
+        TaskSyncContext result = new FindPartitionForStreamingOperation().doOperation(context);
+
+        assertEquals(PartitionStateEnum.CREATED, partitionState(result, "dst").getState());
+    }
+
     private PartitionState partitionState(TaskSyncContext context, String token) {
         return context.getCurrentTaskState().getPartitions().stream()
                 .filter(p -> p.getToken().equals(token))
