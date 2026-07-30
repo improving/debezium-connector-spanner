@@ -497,6 +497,31 @@ public class Connection {
         return this;
     }
 
+    /**
+     * Connects to a database intended to outlive this JVM process: creates it only if it does
+     * not already exist (idempotent across repeated runs), and does not register a drop-on-exit
+     * shutdown hook the way {@link #connect(Dialect)} does. For multi-process use (e.g. a demo
+     * split across separate schema/data/consumer processes that must share one database without
+     * any of them tearing it down just by exiting) - callers are responsible for explicit
+     * cleanup via {@link #dropChangeStream}/{@link #dropTable}/{@link #dropDatabase}.
+     */
+    public Connection connectPersistent(Dialect dialect) throws InterruptedException {
+        if (this.databaseClient != null) {
+            return this;
+        }
+
+        this.init();
+
+        if (!databaseExists(databaseId)) {
+            this.createDatabase(databaseId, dialect);
+        }
+
+        this.databaseClient = this.spanner.getDatabaseClient(DatabaseId.of(projectId, instanceId, databaseId));
+        this.schemaDao = new SchemaDao(databaseClient);
+
+        return this;
+    }
+
     private void init() {
         SpannerOptions.Builder builder = SpannerOptions.newBuilder();
 

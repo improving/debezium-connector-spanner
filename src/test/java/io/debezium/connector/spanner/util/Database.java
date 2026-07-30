@@ -88,6 +88,25 @@ public class Database {
         return this.connection;
     }
 
+    /**
+     * Like {@link #getConnection()}, but via {@link Connection#connectPersistent} - for
+     * multi-process use where the database must outlive any single process holding this
+     * {@link Database} instance. See {@link Connection#connectPersistent} for details.
+     */
+    public Connection getPersistentConnection() {
+        if (this.connection != null) {
+            return this.connection;
+        }
+        try {
+            this.connection = new Connection(this).connectPersistent(dialect);
+        }
+        catch (Exception ex) {
+            ex.printStackTrace();
+            Thread.currentThread().interrupt();
+        }
+        return this.connection;
+    }
+
     public static Builder builder() {
         return new Builder();
     }

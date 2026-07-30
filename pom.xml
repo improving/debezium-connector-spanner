@@ -948,5 +948,96 @@
                 </plugins>
             </build>
         </profile>
+        <profile>
+            <!--
+              Standalone MUTABLE_KEY_RANGE demo (demo/README.md): runs the demo's Java classes
+              via `mvn -Pdemo exec:java@<execution-id>`, independent of the mvn verify/failsafe
+              lifecycle - every execution below is bound to phase "none" so none of this runs
+              as part of a normal build. classpathScope=test since the demo classes live under
+              src/test/java and reuse the existing Connection/Database/KafkaConnectRestClient/
+              RealModeRecordPoller test utilities directly rather than duplicating them.
+            -->
+            <id>demo</id>
+            <activation>
+                <activeByDefault>false</activeByDefault>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>demo-schema</id>
+                                <phase>none</phase>
+                                <goals>
+                                    <goal>java</goal>
+                                </goals>
+                                <configuration>
+                                    <mainClass>io.debezium.connector.spanner.demo.DemoDataGenerator</mainClass>
+                                    <classpathScope>test</classpathScope>
+                                    <arguments>
+                                        <argument>--phase=schema</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>demo-events</id>
+                                <phase>none</phase>
+                                <goals>
+                                    <goal>java</goal>
+                                </goals>
+                                <configuration>
+                                    <mainClass>io.debezium.connector.spanner.demo.DemoDataGenerator</mainClass>
+                                    <classpathScope>test</classpathScope>
+                                    <arguments>
+                                        <argument>--phase=events</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>demo-connect-deploy</id>
+                                <phase>none</phase>
+                                <goals>
+                                    <goal>java</goal>
+                                </goals>
+                                <configuration>
+                                    <mainClass>io.debezium.connector.spanner.demo.DemoKafkaConnectSetup</mainClass>
+                                    <classpathScope>test</classpathScope>
+                                    <arguments>
+                                        <argument>--action=deploy</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>demo-connect-delete</id>
+                                <phase>none</phase>
+                                <goals>
+                                    <goal>java</goal>
+                                </goals>
+                                <configuration>
+                                    <mainClass>io.debezium.connector.spanner.demo.DemoKafkaConnectSetup</mainClass>
+                                    <classpathScope>test</classpathScope>
+                                    <arguments>
+                                        <argument>--action=delete</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>demo-validate</id>
+                                <phase>none</phase>
+                                <goals>
+                                    <goal>java</goal>
+                                </goals>
+                                <configuration>
+                                    <mainClass>io.debezium.connector.spanner.demo.DemoConsumerValidator</mainClass>
+                                    <classpathScope>test</classpathScope>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
     </profiles>
 </project>
