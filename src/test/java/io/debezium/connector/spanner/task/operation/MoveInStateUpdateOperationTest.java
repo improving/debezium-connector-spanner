@@ -6,7 +6,7 @@
 package io.debezium.connector.spanner.task.operation;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 import java.util.List;
 import java.util.Set;
@@ -69,7 +69,7 @@ class MoveInStateUpdateOperationTest {
     /**
      * A partition can be a MoveOut source and a MoveIn destination independently (e.g. it gives
      * away one sub-range while receiving another). Processing this MoveIn must not wipe out an
-     * unrelated, still-pending {@code moveOutState} - {@link RemoveFinishedPartitionOperation}
+     * unrelated, still-pending {@code moveOutStates} entry - {@link RemoveFinishedPartitionOperation}
      * relies on it to avoid deleting this partition before its own destination catches up.
      */
     @Test
@@ -80,7 +80,7 @@ class MoveInStateUpdateOperationTest {
                 .state(PartitionStateEnum.RUNNING)
                 .parents(Set.of("originalParent"))
                 .processedTimestamp(OLD_PROCESSED_TIMESTAMP)
-                .moveOutState(existingMoveOutState)
+                .moveOutStates(List.of(existingMoveOutState))
                 .build();
 
         TaskSyncContext context = TaskSyncContext.builder()
@@ -100,7 +100,7 @@ class MoveInStateUpdateOperationTest {
                 .findFirst()
                 .orElseThrow();
 
-        assertNotNull(updated.getMoveOutState(), "an unrelated pending moveOutState must survive processing of this partition's MoveIn");
-        assertEquals(existingMoveOutState, updated.getMoveOutState());
+        assertFalse(updated.getMoveOutStates().isEmpty(), "an unrelated pending moveOutStates entry must survive processing of this partition's MoveIn");
+        assertEquals(List.of(existingMoveOutState), updated.getMoveOutStates());
     }
 }

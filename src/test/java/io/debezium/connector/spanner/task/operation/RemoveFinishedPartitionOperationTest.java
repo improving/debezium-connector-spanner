@@ -77,7 +77,7 @@ class RemoveFinishedPartitionOperationTest {
                 .state(PartitionStateEnum.FINISHED)
                 .parents(Set.of())
                 .finishedTimestamp(FINISHED_LONG_AGO)
-                .moveOutState(new MoveOutState(MOVE_TS, List.of("dst")))
+                .moveOutStates(List.of(new MoveOutState(MOVE_TS, List.of("dst"))))
                 .build();
         PartitionState dest = PartitionState.builder()
                 .token("dst")
@@ -103,7 +103,7 @@ class RemoveFinishedPartitionOperationTest {
                 .state(PartitionStateEnum.FINISHED)
                 .parents(Set.of())
                 .finishedTimestamp(FINISHED_LONG_AGO)
-                .moveOutState(new MoveOutState(MOVE_TS, List.of("dst")))
+                .moveOutStates(List.of(new MoveOutState(MOVE_TS, List.of("dst"))))
                 .build();
         PartitionState dest = PartitionState.builder()
                 .token("dst")
@@ -130,7 +130,7 @@ class RemoveFinishedPartitionOperationTest {
                 .state(PartitionStateEnum.FINISHED)
                 .parents(Set.of())
                 .finishedTimestamp(FINISHED_LONG_AGO)
-                .moveOutState(new MoveOutState(MOVE_TS, List.of("dst")))
+                .moveOutStates(List.of(new MoveOutState(MOVE_TS, List.of("dst"))))
                 .build();
         PartitionState dest = PartitionState.builder()
                 .token("dst")
@@ -153,13 +153,50 @@ class RemoveFinishedPartitionOperationTest {
                 .state(PartitionStateEnum.FINISHED)
                 .parents(Set.of())
                 .finishedTimestamp(FINISHED_LONG_AGO)
-                .moveOutState(new MoveOutState(MOVE_TS, List.of("dst")))
+                .moveOutStates(List.of(new MoveOutState(MOVE_TS, List.of("dst"))))
                 .build();
         TaskSyncContext context = contextWith(source);
 
         TaskSyncContext result = newOperation().doOperation(context);
 
         assertFalse(isPresent(result, "src"), "source must be deleted when its destination is nowhere to be found");
+    }
+
+    /**
+     * A source never pauses for its own MoveOut events, so it can accumulate several independent
+     * pending moves (to different destinations, at different timestamps) over its lifetime.
+     * Every entry must individually be resolved before the source can be deleted - resolving
+     * only the most recent one must not be enough.
+     */
+    @Test
+    void multiplePendingMovesToDifferentDestinations_sourceNotDeletedUntilBothResumed() {
+        PartitionState source = PartitionState.builder()
+                .token("src")
+                .state(PartitionStateEnum.FINISHED)
+                .parents(Set.of())
+                .finishedTimestamp(FINISHED_LONG_AGO)
+                .moveOutStates(List.of(
+                        new MoveOutState(MOVE_TS, List.of("dst1")),
+                        new MoveOutState(AFTER_MOVE, List.of("dst2"))))
+                .build();
+        PartitionState dest1 = PartitionState.builder()
+                .token("dst1")
+                .state(PartitionStateEnum.RUNNING)
+                .parents(Set.of())
+                .processedTimestamp(BEFORE_MOVE)
+                .build();
+        PartitionState dest2 = PartitionState.builder()
+                .token("dst2")
+                .state(PartitionStateEnum.RUNNING)
+                .parents(Set.of())
+                .processedTimestamp(AFTER_MOVE)
+                .build();
+        TaskSyncContext context = contextWith(source, dest1, dest2);
+
+        TaskSyncContext result = newOperation().doOperation(context);
+
+        assertTrue(isPresent(result, "src"),
+                "source must not be deleted while dst1's earlier move hasn't been resumed, even though dst2's later move has");
     }
 
     @Test

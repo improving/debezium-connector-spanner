@@ -151,30 +151,33 @@ public class RemoveFinishedPartitionOperation implements Operation {
      * has, by construction, already updated its {@code parents} to include this source token in
      * that same step, so {@link #allChildrenFinished} takes over correctly from that point on.
      *
+     * <p>A source partition never pauses for its own MoveOut events, so it can accumulate
+     * several independent, still-pending {@link MoveOutState} entries (to different destinations,
+     * at different commit timestamps) over its lifetime - see {@code getMoveOutStates()}. Every
+     * entry must individually be resolved before the source can be deleted.
+     *
      * <p>This is purely additive for the immutable key range path: partitions created via
-     * {@link ChildPartitionOperation} never populate {@code moveOutState}, so this check
+     * {@link ChildPartitionOperation} never populate {@code moveOutStates}, so this check
      * trivially returns {@code true} and the deletion condition is unchanged from before
      * mutable key range support was added.
      */
     private static boolean moveOutDestinationsHaveResumed(List<PartitionState> allPartitionStates, PartitionState partitionState) {
-        MoveOutState moveOutState = partitionState.getMoveOutState();
-        if (moveOutState == null) {
-            return true;
-        }
-        Timestamp moveOutTimestamp = moveOutState.getTimestamp();
-        for (String destToken : moveOutState.getDestPartitionTokens()) {
-            PartitionState dest = allPartitionStates.stream()
-                    .filter(p -> destToken.equals(p.getToken()))
-                    .findFirst()
-                    .orElse(null);
-            if (dest == null) {
-                // Destination not tracked anywhere - nothing left depending on this source.
-                continue;
-            }
-            boolean destHasReachedThisMove = dest.getProcessedTimestamp() != null
-                    && dest.getProcessedTimestamp().compareTo(moveOutTimestamp) >= 0;
-            if (!destHasReachedThisMove) {
-                return false;
+        for (MoveOutState moveOutState : partitionState.getMoveOutStates()) {
+            Timestamp moveOutTimestamp = moveOutState.getTimestamp();
+            for (String destToken : moveOutState.getDestPartitionTokens()) {
+                PartitionState dest = allPartitionStates.stream()
+                        .filter(p -> destToken.equals(p.getToken()))
+                        .findFirst()
+                        .orElse(null);
+                if (dest == null) {
+                    // Destination not tracked anywhere - nothing left depending on this source.
+                    continue;
+                }
+                boolean destHasReachedThisMove = dest.getProcessedTimestamp() != null
+                        && dest.getProcessedTimestamp().compareTo(moveOutTimestamp) >= 0;
+                if (!destHasReachedThisMove) {
+                    return false;
+                }
             }
         }
         return true;

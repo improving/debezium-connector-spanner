@@ -104,7 +104,7 @@ class FindPartitionForStreamingOperationTest {
                 .token("src1")
                 .state(PartitionStateEnum.RUNNING)
                 .parents(Set.of())
-                .moveOutState(new MoveOutState(BEFORE_MOVE_IN_TS, List.of("dst")))
+                .moveOutStates(List.of(new MoveOutState(BEFORE_MOVE_IN_TS, List.of("dst"))))
                 .build();
         TaskSyncContext context = contextWith(dest, source);
 
@@ -120,7 +120,7 @@ class FindPartitionForStreamingOperationTest {
                 .token("src1")
                 .state(PartitionStateEnum.RUNNING)
                 .parents(Set.of())
-                .moveOutState(new MoveOutState(MOVE_IN_TS, List.of("someOtherDest")))
+                .moveOutStates(List.of(new MoveOutState(MOVE_IN_TS, List.of("someOtherDest"))))
                 .build();
         TaskSyncContext context = contextWith(dest, source);
 
@@ -136,7 +136,7 @@ class FindPartitionForStreamingOperationTest {
                 .token("src1")
                 .state(PartitionStateEnum.RUNNING)
                 .parents(Set.of())
-                .moveOutState(new MoveOutState(MOVE_IN_TS, List.of("dst")))
+                .moveOutStates(List.of(new MoveOutState(MOVE_IN_TS, List.of("dst"))))
                 .build();
         TaskSyncContext context = contextWith(dest, source);
 
@@ -152,7 +152,7 @@ class FindPartitionForStreamingOperationTest {
                 .token("src1")
                 .state(PartitionStateEnum.RUNNING)
                 .parents(Set.of())
-                .moveOutState(new MoveOutState(AFTER_MOVE_IN_TS, List.of("someOtherDest")))
+                .moveOutStates(List.of(new MoveOutState(AFTER_MOVE_IN_TS, List.of("someOtherDest"))))
                 .build();
         TaskSyncContext context = contextWith(dest, source);
 
@@ -168,13 +168,13 @@ class FindPartitionForStreamingOperationTest {
                 .token("src1")
                 .state(PartitionStateEnum.RUNNING)
                 .parents(Set.of())
-                .moveOutState(new MoveOutState(MOVE_IN_TS, List.of("dst")))
+                .moveOutStates(List.of(new MoveOutState(MOVE_IN_TS, List.of("dst"))))
                 .build();
         PartitionState source2 = PartitionState.builder()
                 .token("src2")
                 .state(PartitionStateEnum.RUNNING)
                 .parents(Set.of())
-                .moveOutState(new MoveOutState(BEFORE_MOVE_IN_TS, List.of("dst")))
+                .moveOutStates(List.of(new MoveOutState(BEFORE_MOVE_IN_TS, List.of("dst"))))
                 .build();
         TaskSyncContext context = contextWith(dest, source1, source2);
 
@@ -190,7 +190,7 @@ class FindPartitionForStreamingOperationTest {
                 .token("src1")
                 .state(PartitionStateEnum.RUNNING)
                 .parents(Set.of())
-                .moveOutState(new MoveOutState(MOVE_IN_TS, List.of("dst")))
+                .moveOutStates(List.of(new MoveOutState(MOVE_IN_TS, List.of("dst"))))
                 .build();
         TaskSyncContext context = contextWithShared(dest, source);
 
@@ -206,7 +206,7 @@ class FindPartitionForStreamingOperationTest {
                 .token("src1")
                 .state(PartitionStateEnum.RUNNING)
                 .parents(Set.of())
-                .moveOutState(new MoveOutState(MOVE_IN_TS, List.of("dst")))
+                .moveOutStates(List.of(new MoveOutState(MOVE_IN_TS, List.of("dst"))))
                 .build();
         TaskSyncContext context = contextWithOtherTask(dest, source);
 
@@ -288,6 +288,30 @@ class FindPartitionForStreamingOperationTest {
         TaskSyncContext result = new FindPartitionForStreamingOperation().doOperation(context);
 
         assertEquals(PartitionStateEnum.CREATED, partitionState(result, "dst").getState());
+    }
+
+    /**
+     * A source can accumulate several independent MoveOutState entries over its life (it never
+     * pauses for its own MoveOut events). An older, unrelated entry (to a different destination,
+     * at an earlier timestamp) must not mask the crash-recovery fallback for a *different*,
+     * later MoveOut whose record was lost before being persisted.
+     */
+    @Test
+    void olderUnrelatedMoveOutStateDoesNotMaskCrashRecoveryForLaterMove() {
+        PartitionState dest = destPartition("dst", "src1");
+        PartitionState source = PartitionState.builder()
+                .token("src1")
+                .state(PartitionStateEnum.RUNNING)
+                .parents(Set.of())
+                .moveOutStates(List.of(new MoveOutState(BEFORE_MOVE_IN_TS, List.of("someOtherDest"))))
+                .processedTimestamp(AFTER_MOVE_IN_TS)
+                .build();
+        TaskSyncContext context = contextWith(dest, source);
+
+        TaskSyncContext result = new FindPartitionForStreamingOperation().doOperation(context);
+
+        assertEquals(PartitionStateEnum.READY_FOR_STREAMING, partitionState(result, "dst").getState(),
+                "an older, unrelated MoveOutState entry must not block the crash-recovery fallback for this later move");
     }
 
     private PartitionState partitionState(TaskSyncContext context, String token) {

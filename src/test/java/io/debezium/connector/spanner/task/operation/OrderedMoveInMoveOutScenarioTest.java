@@ -103,10 +103,12 @@ class OrderedMoveInMoveOutScenarioTest {
                 PartitionState.builder().token("P0").state(PartitionStateEnum.RUNNING).parents(Set.of()).build(),
                 PartitionState.builder().token("P1").state(PartitionStateEnum.RUNNING).parents(Set.of()).build(),
                 PartitionState.builder().token("P2").state(PartitionStateEnum.RUNNING).parents(Set.of())
-                        .moveOutState(new MoveOutState(TS0, List.of("P0")))
+                        .moveOutStates(List.of(new MoveOutState(TS0, List.of("P0"))))
                         .build(),
                 PartitionState.builder().token("P3").state(PartitionStateEnum.RUNNING).parents(Set.of())
-                        .moveOutState(new MoveOutState(TS1, List.of("P4")))
+                        .moveOutStates(List.of(
+                                new MoveOutState(TS0, List.of("P0")),
+                                new MoveOutState(TS1, List.of("P4"))))
                         .build());
 
         // --- 1st record: MoveIn from P1 at TS0, seq "00000" ---
@@ -145,12 +147,17 @@ class OrderedMoveInMoveOutScenarioTest {
         assertEquals(PartitionStateEnum.READY_FOR_STREAMING, partition("P0").getState(),
                 "P0 must continue immediately: P3's MoveOutState timestamp TS1 is already past TS0");
 
-        // Final state matches the design doc table exactly.
-        assertEquals(TS0, partition("P1").getMoveOutState().getTimestamp());
-        assertEquals(List.of("P0"), partition("P1").getMoveOutState().getDestPartitionTokens());
-        assertEquals(TS0, partition("P2").getMoveOutState().getTimestamp());
-        assertEquals(List.of("P0"), partition("P2").getMoveOutState().getDestPartitionTokens());
-        assertEquals(TS1, partition("P3").getMoveOutState().getTimestamp());
-        assertEquals(List.of("P4"), partition("P3").getMoveOutState().getDestPartitionTokens());
+        // Final state matches the design doc table exactly (P3 additionally retains its
+        // earlier TS0 move to P0, since a source never overwrites - only accumulates - its
+        // MoveOut history).
+        assertEquals(1, partition("P1").getMoveOutStates().size());
+        assertEquals(TS0, partition("P1").getMoveOutStates().get(0).getTimestamp());
+        assertEquals(List.of("P0"), partition("P1").getMoveOutStates().get(0).getDestPartitionTokens());
+        assertEquals(1, partition("P2").getMoveOutStates().size());
+        assertEquals(TS0, partition("P2").getMoveOutStates().get(0).getTimestamp());
+        assertEquals(List.of("P0"), partition("P2").getMoveOutStates().get(0).getDestPartitionTokens());
+        assertEquals(2, partition("P3").getMoveOutStates().size());
+        assertEquals(TS1, partition("P3").getMoveOutStates().get(1).getTimestamp());
+        assertEquals(List.of("P4"), partition("P3").getMoveOutStates().get(1).getDestPartitionTokens());
     }
 }

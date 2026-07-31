@@ -118,16 +118,20 @@ public class FindPartitionForStreamingOperation implements Operation {
      * {@code finishedPartitions} is treated as having already satisfied this destination's wait
      * condition, rather than deadlocking forever waiting on a purged {@link MoveOutState}.
      *
-     * <p>A source can also be missing its {@link MoveOutState} because a task crashed after the
-     * source's own change stream query had already read past the MoveIn commit timestamp, but
-     * before the resulting {@code MoveOutStateUpdateOperation} update was persisted to the sync
-     * topic. On restart, the source resumes from its persisted offset - which is already past
-     * that timestamp - so it will never re-read (and therefore never re-emit) that boundary
-     * record again, and {@code moveOutState} would otherwise stay {@code null} forever. If the
-     * source's own {@code processedTimestamp} is already strictly past the MoveIn timestamp, its
-     * change stream has necessarily already read through that boundary for real (Spanner change
-     * streams deliver records in commit-timestamp order), so it is safe to treat the MoveOut as
-     * satisfied despite the missing local bookkeeping.
+     * <p>A source can also be missing a matching {@link MoveOutState} entry because a task
+     * crashed after the source's own change stream query had already read past the MoveIn commit
+     * timestamp, but before the resulting {@code MoveOutStateUpdateOperation} update was
+     * persisted to the sync topic. On restart, the source resumes from its persisted offset -
+     * which is already past that timestamp - so it will never re-read (and therefore never
+     * re-emit) that boundary record again. If the source's own {@code processedTimestamp} is
+     * already strictly past the MoveIn timestamp, its change stream has necessarily already read
+     * through that boundary for real (Spanner change streams deliver records in
+     * commit-timestamp order), so it is safe to treat the MoveOut as satisfied despite the
+     * missing local bookkeeping. This fallback is checked whenever no entry proves the move is
+     * satisfied - not only when {@code moveOutStates} is completely empty - since a source can
+     * accumulate several independent MoveOut entries over its life (see
+     * {@code MoveOutStateUpdateOperation}) and an older, unrelated entry must never mask the loss
+     * of a different, later one.
      */
     private boolean canDestPartitionContinue(TaskSyncContext taskSyncContext, PartitionState destPartition, Set<String> finishedPartitions) {
         MoveInState moveInState = destPartition.getMoveInState();
@@ -135,38 +139,43 @@ public class FindPartitionForStreamingOperation implements Operation {
         String destToken = destPartition.getToken();
 
         for (String sourceToken : moveInState.getSourcePartitionTokens()) {
-            MoveOutState sourceMoveOutState = findMoveOutState(taskSyncContext, sourceToken);
-            if (sourceMoveOutState == null) {
-                if (finishedPartitions.contains(sourceToken)) {
-                    LOGGER.info("Task {}, source partition {} already finished and purged, treating MoveOut as satisfied for destination {}",
-                            taskSyncContext.getTaskUid(), sourceToken, destToken);
-                    continue;
-                }
-                PartitionState sourceState = findPartitionState(taskSyncContext, sourceToken);
-                if (sourceState != null && sourceState.getProcessedTimestamp() != null
-                        && sourceState.getProcessedTimestamp().compareTo(moveInTimestamp) > 0) {
-                    LOGGER.info(
-                            "Task {}, source partition {} already streamed past MoveIn timestamp {} (processedTimestamp={}) despite missing MoveOutState "
-                                    + "(likely lost in a crash before it was persisted), treating MoveOut as satisfied for destination {}",
-                            taskSyncContext.getTaskUid(), sourceToken, moveInTimestamp, sourceState.getProcessedTimestamp(), destToken);
-                    continue;
-                }
-                return false;
-            }
-            int cmp = sourceMoveOutState.getTimestamp().compareTo(moveInTimestamp);
-            if (cmp < 0) {
-                return false;
-            }
-            else if (cmp == 0 && !sourceMoveOutState.getDestPartitionTokens().contains(destToken)) {
+            if (!sourceHasResumedThisMove(taskSyncContext, sourceToken, moveInTimestamp, destToken, finishedPartitions)) {
                 return false;
             }
         }
         return true;
     }
 
-    private MoveOutState findMoveOutState(TaskSyncContext taskSyncContext, String token) {
+    private boolean sourceHasResumedThisMove(TaskSyncContext taskSyncContext, String sourceToken, Timestamp moveInTimestamp,
+                                             String destToken, Set<String> finishedPartitions) {
+        boolean satisfiedByMoveOutState = findMoveOutStates(taskSyncContext, sourceToken).stream()
+                .anyMatch(moveOutState -> {
+                    int cmp = moveOutState.getTimestamp().compareTo(moveInTimestamp);
+                    return cmp > 0 || (cmp == 0 && moveOutState.getDestPartitionTokens().contains(destToken));
+                });
+        if (satisfiedByMoveOutState) {
+            return true;
+        }
+        if (finishedPartitions.contains(sourceToken)) {
+            LOGGER.info("Task {}, source partition {} already finished and purged, treating MoveOut as satisfied for destination {}",
+                    taskSyncContext.getTaskUid(), sourceToken, destToken);
+            return true;
+        }
+        PartitionState sourceState = findPartitionState(taskSyncContext, sourceToken);
+        if (sourceState != null && sourceState.getProcessedTimestamp() != null
+                && sourceState.getProcessedTimestamp().compareTo(moveInTimestamp) > 0) {
+            LOGGER.info(
+                    "Task {}, source partition {} already streamed past MoveIn timestamp {} (processedTimestamp={}) despite missing a matching MoveOutState "
+                            + "(likely lost in a crash before it was persisted), treating MoveOut as satisfied for destination {}",
+                    taskSyncContext.getTaskUid(), sourceToken, moveInTimestamp, sourceState.getProcessedTimestamp(), destToken);
+            return true;
+        }
+        return false;
+    }
+
+    private List<MoveOutState> findMoveOutStates(TaskSyncContext taskSyncContext, String token) {
         PartitionState partitionState = findPartitionState(taskSyncContext, token);
-        return partitionState == null ? null : partitionState.getMoveOutState();
+        return partitionState == null ? List.of() : partitionState.getMoveOutStates();
     }
 
     private PartitionState findPartitionState(TaskSyncContext taskSyncContext, String token) {
