@@ -25,6 +25,13 @@ import io.debezium.connector.spanner.task.TaskSyncContext;
  * tokens, and the {@code processedTimestamp}/{@code lastBoundaryRecordSequence} fields
  * are set so that streaming resumes from the exact MoveIn boundary without re-emitting
  * already-processed records.
+ *
+ * <p>A partition can independently take part in a MoveOut as a source and a MoveIn as a
+ * destination (e.g. it gives away one sub-range while receiving another). Any existing
+ * {@code moveOutState} on this partition is therefore left untouched here - it tracks an
+ * unrelated pending move-out that {@link RemoveFinishedPartitionOperation} still needs in
+ * order to avoid deleting this partition before its own destination(s) catch up, and must
+ * not be wiped out just because this partition also happens to be processing a MoveIn.
  */
 public class MoveInStateUpdateOperation implements Operation {
 
@@ -58,7 +65,6 @@ public class MoveInStateUpdateOperation implements Operation {
                                 .state(PartitionStateEnum.CREATED)
                                 .parents(new HashSet<>(sourcePartitionTokens))
                                 .moveInState(newMoveInState)
-                                .moveOutState(null)
                                 .processedTimestamp(commitTimestamp)
                                 .lastBoundaryRecordSequence(recordSequence)
                                 .build();

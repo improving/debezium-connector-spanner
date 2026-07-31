@@ -6,6 +6,7 @@
 package io.debezium.connector.spanner.task.operation;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 import java.util.List;
 import java.util.Set;
@@ -14,6 +15,7 @@ import org.junit.jupiter.api.Test;
 
 import com.google.cloud.Timestamp;
 
+import io.debezium.connector.spanner.kafka.internal.model.MoveOutState;
 import io.debezium.connector.spanner.kafka.internal.model.PartitionState;
 import io.debezium.connector.spanner.kafka.internal.model.PartitionStateEnum;
 import io.debezium.connector.spanner.kafka.internal.model.TaskState;
@@ -62,5 +64,43 @@ class MoveInStateUpdateOperationTest {
                 "lastBoundaryRecordSequence must be recorded so filterBoundaryDuplicates can skip already-seen records at that timestamp");
         assertEquals(PartitionStateEnum.CREATED, updated.getState());
         assertEquals(Set.of("src1"), updated.getParents());
+    }
+
+    /**
+     * A partition can be a MoveOut source and a MoveIn destination independently (e.g. it gives
+     * away one sub-range while receiving another). Processing this MoveIn must not wipe out an
+     * unrelated, still-pending {@code moveOutState} - {@link RemoveFinishedPartitionOperation}
+     * relies on it to avoid deleting this partition before its own destination catches up.
+     */
+    @Test
+    void doesNotClearUnrelatedPendingMoveOutState() {
+        MoveOutState existingMoveOutState = new MoveOutState(Timestamp.ofTimeSecondsAndNanos(50, 0), List.of("otherDest"));
+        PartitionState destPartition = PartitionState.builder()
+                .token("dst")
+                .state(PartitionStateEnum.RUNNING)
+                .parents(Set.of("originalParent"))
+                .processedTimestamp(OLD_PROCESSED_TIMESTAMP)
+                .moveOutState(existingMoveOutState)
+                .build();
+
+        TaskSyncContext context = TaskSyncContext.builder()
+                .taskUid("task0")
+                .currentTaskState(TaskState.builder()
+                        .taskUid("task0")
+                        .partitions(List.of(destPartition))
+                        .sharedPartitions(List.of())
+                        .build())
+                .build();
+
+        TaskSyncContext result = new MoveInStateUpdateOperation(
+                "dst", MOVE_IN_TIMESTAMP, "00042", List.of("src1")).doOperation(context);
+
+        PartitionState updated = result.getCurrentTaskState().getPartitions().stream()
+                .filter(p -> p.getToken().equals("dst"))
+                .findFirst()
+                .orElseThrow();
+
+        assertNotNull(updated.getMoveOutState(), "an unrelated pending moveOutState must survive processing of this partition's MoveIn");
+        assertEquals(existingMoveOutState, updated.getMoveOutState());
     }
 }
