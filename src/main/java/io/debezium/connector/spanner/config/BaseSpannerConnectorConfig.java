@@ -153,8 +153,8 @@ public abstract class BaseSpannerConnectorConfig extends CommonConnectorConfig {
             .withGroup(Field.createGroupEntry(Field.Group.CONNECTOR, 0))
             .withWidth(Width.SHORT)
             .withImportance(Importance.MEDIUM)
-            .withDefault(false)
-            .withDescription("When true, enables move-in/move-out ordering for mutable key range change streams. Default false.");
+            .withDefault(true)
+            .withDescription("When true, enables move-in/move-out ordering for mutable key range change streams. Default true.");
 
     public static final Field MUTABLE_WINDOW_MINUTES = Field.create(MUTABLE_WINDOW_MINUTES_PROPERTY_NAME)
             .withDisplayName("Mutable key range sliding window size (minutes)")
