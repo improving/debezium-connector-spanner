@@ -26,6 +26,7 @@ import io.debezium.connector.spanner.db.model.event.FinishPartitionEvent;
 import io.debezium.connector.spanner.db.model.event.HeartbeatEvent;
 import io.debezium.connector.spanner.db.model.event.PartitionEndEvent;
 import io.debezium.connector.spanner.db.model.event.PartitionEventEvent;
+import io.debezium.connector.spanner.db.model.event.RecordSequenceUtils;
 import io.debezium.connector.spanner.metrics.MetricsEventPublisher;
 import io.debezium.connector.spanner.metrics.event.DelayChangeStreamEventsMetricEvent;
 
@@ -256,7 +257,7 @@ public class SpannerChangeStreamService {
         for (ChangeStreamEvent event : events) {
             if (windowStart.equals(event.getRecordTimestamp())
                     && event.getRecordSequence() != null
-                    && event.getRecordSequence().compareTo(lastBoundaryRecordSequence) <= 0) {
+                    && RecordSequenceUtils.compare(event.getRecordSequence(), lastBoundaryRecordSequence) <= 0) {
                 LOGGER.debug("Task: {}, Skipping boundary duplicate event at {} seq {}",
                         taskUid, windowStart, event.getRecordSequence());
                 continue;
