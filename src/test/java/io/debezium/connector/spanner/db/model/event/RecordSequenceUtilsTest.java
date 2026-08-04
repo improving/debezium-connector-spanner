@@ -11,8 +11,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 
 /**
- * Verifies record_sequence comparisons against the real-world hex {@code "<hi>-<lo>"} composite
- * format observed from Spanner (e.g. {@code "963d1af435fb3e79-00000000"}).
+ * Verifies record_sequence handling against both real-world formats observed from Spanner: the
+ * legacy "V1" plain hex value with no discriminator (e.g. {@code "00000001"}), and the "V2" hex
+ * {@code "<hi>-<lo>"} composite (e.g. {@code "963d1af435fb3e79-00000000"}).
  */
 class RecordSequenceUtilsTest {
 
@@ -58,25 +59,74 @@ class RecordSequenceUtilsTest {
     @Test
     void parsesOpaqueHexCompositeDeterministicallyWithoutThrowing() {
         String sequence = "963d1af435fb3e79-00000000";
-        Long parsed = RecordSequenceUtils.parseToComparableLong(sequence);
-        assertEquals(parsed, RecordSequenceUtils.parseToComparableLong(sequence));
+        Long parsed = RecordSequenceUtils.parseSequenceNumber(sequence);
+        assertEquals(parsed, RecordSequenceUtils.parseSequenceNumber(sequence));
     }
 
     @Test
     void returnsNullForNullInput() {
-        assertEquals(null, RecordSequenceUtils.parseToComparableLong(null));
+        assertEquals(null, RecordSequenceUtils.parseSequenceNumber(null));
+    }
+
+    /**
+     * Regression test for the public {@code source.sequence} field: Debezium's documentation
+     * describes it as this record's number within its transaction, i.e. {@code lo} alone.
+     * {@code hi} is a transaction id and two records from different transactions (different {@code hi})
+     * sharing the same in-transaction position ({@code lo}) must parse to the same "sequence" value.
+     */
+    @Test
+    void parseSequenceNumberIgnoresDiscriminatorAndReturnsOnlyLo() {
+        String transactionA = "963d1af435fb3e79-00000005";
+        String transactionB = "0000000000000001-00000005";
+
+        assertEquals(5L, RecordSequenceUtils.parseSequenceNumber(transactionA));
+        assertEquals(RecordSequenceUtils.parseSequenceNumber(transactionA), RecordSequenceUtils.parseSequenceNumber(transactionB));
+    }
+
+    /**
+     * V1 record_sequence values have no {@code "<hi>-<lo>"} separator at all - the whole string
+     * is the sequence number, with no discriminator to strip out.
+     */
+    @Test
+    void parseSequenceNumberHandlesV1PlainHexFormat() {
+        assertEquals(1L, RecordSequenceUtils.parseSequenceNumber("00000001"));
+    }
+
+    /**
+     * A V1 value and an equivalent V2 value with an all-zero {@code hi} must parse to the same
+     * sequence number - a V1 value is just a V2 value with no discriminator.
+     */
+    @Test
+    void v1AndEquivalentV2SequenceParseToTheSameSequenceNumber() {
+        assertEquals(RecordSequenceUtils.parseSequenceNumber("00000001"),
+                RecordSequenceUtils.parseSequenceNumber("0000000000000000-00000001"));
+    }
+
+    /**
+     * V1 values must also compare correctly against {@link RecordSequenceUtils#compare}, not
+     * just against themselves - mirrors {@link #distinguishesHexCompositesDifferingOnlyInUpperBitsOfDiscriminator}
+     * for the no-discriminator case: a V1 value and a V2 value sharing the same {@code lo} but
+     * differing in {@code hi} must not compare as equal.
+     */
+    @Test
+    void v1SequenceWithDifferentDiscriminatorThanV2DoesNotCompareEqual() {
+        String v1 = "00000001";
+        String v2WithNonZeroHi = "0000000000000001-00000001";
+
+        assertTrue(RecordSequenceUtils.compare(v1, v2WithNonZeroHi) != 0,
+                "a V1 value (hi=0) must not compare equal to a V2 value with a non-zero hi, even with the same lo");
     }
 
     /**
      * Regression test: {@code record_sequence} values from streams that aren't
      * {@code MUTABLE_KEY_RANGE} (e.g. from the Spanner emulator) can be plain decimal, with no
-     * {@code "-"} hi/lo separator. {@code parseToComparableLong} must fall back to
+     * {@code "-"} hi/lo separator. {@code parseSequenceNumber} must fall back to
      * {@link Long#parseLong} for these instead of throwing {@code ArrayIndexOutOfBoundsException}
      * from the hyphenated hi/lo split.
      */
     @Test
     void fallsBackToPlainDecimalParsingWhenSequenceHasNoHyphen() {
         String sequence = "42";
-        assertEquals(42L, RecordSequenceUtils.parseToComparableLong(sequence));
+        assertEquals(42L, RecordSequenceUtils.parseSequenceNumber(sequence));
     }
 }

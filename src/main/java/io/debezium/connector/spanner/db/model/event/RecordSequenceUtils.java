@@ -22,6 +22,10 @@ public final class RecordSequenceUtils {
     private static long[] splitHiLo(String sequence) {
         String[] parts = sequence.split("-", 2);
         long hi = Long.parseUnsignedLong(parts[0], 16);
+        if (parts.length == 1) {
+            return new long[]{ 0L, hi };
+        }
+
         long lo = Long.parseUnsignedLong(parts[1], 16);
         return new long[]{ hi, lo };
     }
@@ -37,7 +41,7 @@ public final class RecordSequenceUtils {
      * the hyphenated hex {@code "<hi>-<lo>"} composite), e.g. a plain decimal sequence from a
      * stream that isn't {@code MUTABLE_KEY_RANGE}.
      */
-    public static Long parseToComparableLong(String sequence) {
+    public static Long parseSequenceNumber(String sequence) {
         if (sequence == null) {
             return null;
         }
@@ -45,7 +49,7 @@ public final class RecordSequenceUtils {
             return Long.parseLong(sequence);
         }
         long[] hiLo = splitHiLo(sequence);
-        return (hiLo[0] << 32) | (hiLo[1] & 0xFFFFFFFFL);
+        return hiLo[1];
     }
 
     /**
