@@ -25,7 +25,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIf;
 
 import io.debezium.config.Configuration;
 import io.debezium.util.Testing;
@@ -54,7 +53,6 @@ import io.debezium.util.Testing;
  * <p>WINDOW_MINUTES is set to 1 so the sliding-window processedTimestamp
  * test completes in ~2 minutes instead of the production 20-minute default.
  */
-@EnabledIf("hasNonEmulatorBackend")
 public class MutableKeyRangeIT extends AbstractSpannerConnectorIT {
 
     private static final String TABLE_CRUD = "mkr_crud_table";
