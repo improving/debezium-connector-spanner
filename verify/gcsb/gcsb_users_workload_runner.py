@@ -116,7 +116,7 @@ class GcsbAuditBuffer:
       return
 
     self.batch_counter += 1
-    ts_str = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+    ts_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
     filename = f"gcsb_audit_batch_{self.batch_counter:05d}_{ts_str}.jsonl"
     local_path = os.path.join(self.scratch_dir, filename)
 
@@ -164,7 +164,7 @@ def execute_spanner_dml(
     raise RuntimeError(
         f"Spanner DML execution failed: {res.stderr or res.stdout}"
     )
-  return datetime.datetime.utcnow().isoformat() + "Z"
+  return datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def run_workload(
