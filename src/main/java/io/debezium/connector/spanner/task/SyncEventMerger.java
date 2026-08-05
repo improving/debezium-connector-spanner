@@ -54,8 +54,16 @@ public class SyncEventMerger {
         TaskState currentTask = currentContext.getTaskStates().get(newMessage.getTaskUid());
 
         if (currentTask == null) {
-            LOGGER.debug("Task {}, The task's UID: {} not contained in current task states map", currentContext.getTaskUid(), newMessage.getTaskUid());
-            return builder.build();
+            // Unknown task UID (new task, or a restart before the next rebalance). Add its state
+            // to taskStates rather than dropping this message. Otherwise, this task's updates will
+            // be lost forever, since only a full rebalance/epoch sync can create the missing entry.
+            LOGGER.debug("Task {}, The task's UID: {} not contained in current task states map, inserting it", currentContext.getTaskUid(), newMessage.getTaskUid());
+            Map<String, TaskState> taskStates = new HashMap<>(currentContext.getTaskStates());
+            taskStates.put(newMessage.getTaskUid(), newTask);
+            return builder
+                    .taskStates(taskStates)
+                    .createdTimestamp(Long.max(currentContext.getCreatedTimestamp(), newMessage.getMessageTimestamp()))
+                    .build();
         }
 
         if (newTask.getStateTimestamp() > currentTask.getStateTimestamp()) {

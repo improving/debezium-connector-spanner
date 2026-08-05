@@ -107,6 +107,42 @@ class SyncEventMergerTest {
         Assertions.assertEquals(taskState3.getSharedPartitionsMap().size(), 1);
     }
 
+    /**
+     * Regression test: a REGULAR sync-topic message (e.g. published right after
+     * MoveOutStateUpdateOperation) about a remote task whose UID isn't yet present in the
+     * current task's {@code taskStates} map must still be incorporated rather than silently dropped.
+     */
+    @Test
+    void testMergeIncrementalTaskSyncEventInsertsPreviouslyUnknownTaskState() {
+        TaskState unknownTask = generateTaskStateWithPartitions("task9",
+                List.of(PartitionState.builder().token("token20").state(PartitionStateEnum.RUNNING).build()),
+                List.of());
+
+        TaskSyncContext sourceContext = TaskSyncContext.builder()
+                .taskUid("task9")
+                .currentTaskState(unknownTask)
+                .taskStates(Map.of())
+                .build();
+
+        TaskState currentTask2 = generateTaskStateWithPartitions("task2",
+                List.of(PartitionState.builder().token("token10").state(PartitionStateEnum.RUNNING).build()),
+                List.of());
+
+        TaskSyncContext destContext = TaskSyncContext.builder()
+                .taskUid("task2")
+                .currentTaskState(currentTask2)
+                .taskStates(Map.of())
+                .build();
+
+        TaskSyncEvent regularEventFromUnknownTask = sourceContext.buildCurrentTaskSyncEvent();
+        TaskSyncContext merged = mergeIncrementalTaskSyncEvent(destContext, regularEventFromUnknownTask);
+
+        Assertions.assertEquals(1, merged.getTaskStates().size());
+        TaskState mergedTask9 = merged.getTaskStates().get("task9");
+        Assertions.assertEquals("task9", mergedTask9.getTaskUid());
+        Assertions.assertEquals(PartitionStateEnum.RUNNING, mergedTask9.getPartitionsMap().get("token20").getState());
+    }
+
     @Test
     void testMergeNewEpoch() {
         TaskSyncContext taskSyncContext1 = buildTaskSyncContext1(RebalanceState.NEW_EPOCH_STARTED, false);
