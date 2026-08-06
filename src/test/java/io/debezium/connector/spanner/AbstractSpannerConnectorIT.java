@@ -40,7 +40,6 @@ public class AbstractSpannerConnectorIT extends AbstractAsyncEngineConnectorTest
                 .with("gcp.spanner.instance.id", database.getInstanceId())
                 .with("gcp.spanner.project.id", database.getProjectId())
                 .with("gcp.spanner.database.id", database.getDatabaseId())
-                .with("gcp.spanner.emulator.host", "http://localhost:9010")
                 .with("offset.storage", "org.apache.kafka.connect.storage.MemoryOffsetBackingStore")
                 .with("connector.spanner.sync.kafka.bootstrap.servers", KAFKA_ENVIRONMENT.kafkaBrokerApiOn().getAddress())
                 .with("internal.schema.history.kafka.bootstrap.servers", KAFKA_ENVIRONMENT.kafkaBrokerApiOn().getAddress())
@@ -48,6 +47,9 @@ public class AbstractSpannerConnectorIT extends AbstractAsyncEngineConnectorTest
                 .with("heartbeat.interval.ms", "300000")
                 .with("gcp.spanner.low-watermark.enabled", false)
                 .with("tasks.max", 3); // see DBZ-8428
+        if (!Database.isRealSpannerMode()) {
+            builder.with("gcp.spanner.emulator.host", "http://localhost:9010");
+        }
         if (System.getProperty(BaseSpannerConnectorConfig.SPANNER_TYPE_PROPERTY_NAME) != null) {
             builder.with(BaseSpannerConnectorConfig.SPANNER_TYPE_PROPERTY_NAME, System.getProperty(BaseSpannerConnectorConfig.SPANNER_TYPE_PROPERTY_NAME));
         }
@@ -90,8 +92,13 @@ public class AbstractSpannerConnectorIT extends AbstractAsyncEngineConnectorTest
         return Integer.parseInt(System.getProperty(TEST_PROPERTY_PREFIX + "records.waittime", "30"));
     }
 
+    protected static boolean hasNonEmulatorBackend() {
+        return Database.isSpannerOmniEndpoint() || Database.isRealSpannerMode();
+    }
+
     protected String getTopicName(Configuration config, String tableName) {
         String debeziumConnectorName = "testing-connector";
         return debeziumConnectorName + "." + tableName;
     }
+
 }

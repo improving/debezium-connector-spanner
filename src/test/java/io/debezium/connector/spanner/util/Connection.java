@@ -5,6 +5,7 @@
  */
 package io.debezium.connector.spanner.util;
 
+import static io.debezium.connector.spanner.util.Database.isRealSpannerMode;
 import static io.debezium.connector.spanner.util.Database.isSpannerOmniEndpoint;
 import static org.awaitility.Awaitility.await;
 
@@ -124,11 +125,15 @@ public class Connection {
         this.updateDDL(List.of("create table " + tableDefinition));
     }
 
+    private static long ddlWaitTimeSeconds() {
+        return Long.parseLong(System.getProperty("debezium.test.spanner.ddl.waittime", "60"));
+    }
+
     public void createChangeStream(String changeStreamName, String... tables) throws ExecutionException,
             InterruptedException {
         this.updateDDL(List.of("create change stream " + changeStreamName + " for " +
                 (tables.length == 0 ? "ALL" : String.join(",", tables))));
-        await().atMost(Duration.ofSeconds(60)).until(() -> isStreamExist(changeStreamName));
+        await().atMost(Duration.ofSeconds(ddlWaitTimeSeconds())).until(() -> isStreamExist(changeStreamName));
     }
 
     public void createMutableKeyRangeChangeStream(String changeStreamName, String... tables) throws ExecutionException,
@@ -136,7 +141,7 @@ public class Connection {
         this.updateDDL(List.of("create change stream " + changeStreamName + " for " +
                 (tables.length == 0 ? "ALL" : String.join(",", tables)) +
                 " OPTIONS (partition_mode = 'MUTABLE_KEY_RANGE')"));
-        await().atMost(Duration.ofSeconds(60)).until(() -> isStreamExist(changeStreamName));
+        await().atMost(Duration.ofSeconds(ddlWaitTimeSeconds())).until(() -> isStreamExist(changeStreamName));
     }
 
     /**
@@ -178,7 +183,7 @@ public class Connection {
                 " OPTIONS (\n" +
                 "            value_capture_type = 'NEW_VALUES'\n" +
                 "        ) "));
-        await().atMost(Duration.ofSeconds(60)).until(() -> isStreamExist(changeStreamName));
+        await().atMost(Duration.ofSeconds(ddlWaitTimeSeconds())).until(() -> isStreamExist(changeStreamName));
     }
 
     public void createChangeStreamNewRow(String changeStreamName, String... tables) throws ExecutionException,
@@ -188,22 +193,26 @@ public class Connection {
                 " OPTIONS (\n" +
                 "            value_capture_type = 'NEW_ROW'\n" +
                 "        ) "));
-        await().atMost(Duration.ofSeconds(60)).until(() -> isStreamExist(changeStreamName));
+        await().atMost(Duration.ofSeconds(ddlWaitTimeSeconds())).until(() -> isStreamExist(changeStreamName));
     }
 
     private String createInstance() {
         if (isSpannerOmniEndpoint()) {
             return DatabaseClientFactory.SPANNER_OMNI_DEFAULT_ID;
         }
+        else if (isRealSpannerMode()) {
+            // real mode targets a pre-provisioned, persistent instance; never create/modify it here
+            return instanceId;
+        }
         for (Instance value : this.spanner.getInstanceAdminClient().listInstances().iterateAll()) {
-            if (value.getId().getInstance().equals("test-instance")) {
-                return "test-instance";
+            if (value.getId().getInstance().equals(instanceId)) {
+                return instanceId;
             }
         }
         String configId = "regional-us-central1";
         String displayName = "For IT";
         int nodeCount = 1;
-        InstanceInfo instanceInfo = InstanceInfo.newBuilder(InstanceId.of(projectId, "test-instance"))
+        InstanceInfo instanceInfo = InstanceInfo.newBuilder(InstanceId.of(projectId, instanceId))
                 .setInstanceConfigId(InstanceConfigId.of(projectId, configId))
                 .setNodeCount(nodeCount)
                 .setDisplayName(displayName)
@@ -217,7 +226,7 @@ public class Connection {
         catch (InterruptedException | ExecutionException e) {
             throw new RuntimeException(e);
         }
-        return "test-instance";
+        return instanceId;
     }
 
     private boolean isStreamExist(String streamName) {
@@ -364,9 +373,9 @@ public class Connection {
     private void init() {
         SpannerOptions.Builder builder = SpannerOptions.newBuilder();
 
-        builder.setCredentials(NoCredentials.getInstance());
         builder.setProjectId(projectId);
         if (isSpannerOmniEndpoint()) {
+            builder.setCredentials(NoCredentials.getInstance());
             builder.setExperimentalHost(System.getProperty("gcp.spanner.host"));
             if (Boolean.parseBoolean(System.getProperty("spanner.omni.use.plaintext", "false"))) {
                 builder.setChannelConfigurator(ManagedChannelBuilder::usePlaintext);
@@ -375,10 +384,14 @@ public class Connection {
                     && !Strings.isNullOrEmpty(System.getProperty("spanner.omni.client.cert.path"))) {
                 builder.useClientCert(System.getProperty("spanner.omni.client.cert.path"), System.getProperty("spanner.omni.client.key.path"));
             }
-            builder.setBuiltInMetricsEnabled(false)
-                    .setCredentials(NoCredentials.getInstance());
+            builder.setBuiltInMetricsEnabled(false);
+        }
+        else if (isRealSpannerMode()) {
+            // Neither NoCredentials nor an emulator host is set here: SpannerOptions resolves
+            // Application Default Credentials on its own, matching production behavior.
         }
         else {
+            builder.setCredentials(NoCredentials.getInstance());
             builder.setEmulatorHost(emulatorHost);
         }
 

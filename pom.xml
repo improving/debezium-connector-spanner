@@ -33,14 +33,16 @@
         <assembly.descriptor>connector-distribution-with-jsr310</assembly.descriptor>
         <docker.tag.name>latest</docker.tag.name>
         <docker.skip.push>true</docker.skip.push>
-        <docker.repository.name>quay.io/debezium/kafka-spanner-connector</docker.repository.name>
+        <docker.repository.name>kafka-spanner-connector</docker.repository.name>
         <!--
           Specify the properties that will be used for setting up the integration tests' Docker container.
         -->
         <docker.db>gcr.io/cloud-spanner-emulator/emulator</docker.db>
         <docker.filter>${docker.db},${docker.repository.name}:${docker.tag.name}</docker.filter>
         <docker.skip>false</docker.skip>
+        <docker.skip.emulator>${docker.skip}</docker.skip.emulator>
         <docker.showLogs>true</docker.showLogs>
+        <docker.it.network.name>spanner-connector-it-network</docker.it.network.name>
 
         <publish.descriptorset>false</publish.descriptorset>
     </properties>
@@ -474,11 +476,16 @@
                     <logDate>default</logDate>
                     <verbose>true</verbose>
                     <imagePullPolicy>IfNotPresent</imagePullPolicy>
+                    <autoCreateCustomNetworks>true</autoCreateCustomNetworks>
                     <images>
                         <image>
                             <name>${docker.db}</name>
                             <run>
-                                <namingStrategy>none</namingStrategy>
+                                <containerNamePattern>spanner-emulator</containerNamePattern>
+                                <network>
+                                    <mode>custom</mode>
+                                    <name>${docker.it.network.name}</name>
+                                </network>
                                 <ports>
                                     <port>9010:9010</port>
                                     <port>9020:9020</port>
@@ -493,10 +500,6 @@
                                     <log>Cloud Spanner Emulator running.</log>
                                 </wait>
                             </run>
-                            <external>
-                                <type>properties</type>
-                                <mode>override</mode>
-                            </external>
                         </image>
                     </images>
                 </configuration>
@@ -557,6 +560,9 @@
                         <goals>
                             <goal>start</goal>
                         </goals>
+                        <configuration>
+                            <skip>${docker.skip.emulator}</skip>
+                        </configuration>
                     </execution>
                     <execution>
                         <id>stop</id>
@@ -564,6 +570,9 @@
                         <goals>
                             <goal>stop</goal>
                         </goals>
+                        <configuration>
+                            <skip>${docker.skip.emulator}</skip>
+                        </configuration>
                     </execution>
                 </executions>
             </plugin>
@@ -670,9 +679,6 @@
                     <name>skipITs</name>
                 </property>
             </activation>
-            <properties>
-                <docker.skip>true</docker.skip>
-            </properties>
         </profile>
         <profile>
             <id>quick</id>
@@ -785,6 +791,29 @@
                                 </configuration>
                             </execution>
                         </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <profile>
+            <id>real-spanner</id>
+            <activation>
+                <activeByDefault>false</activeByDefault>
+            </activation>
+            <properties>
+                <!-- Real mode talks to a persistent Cloud Spanner instance; don't spin up the local emulator container. -->
+                <docker.skip.emulator>true</docker.skip.emulator>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <configuration>
+                            <systemPropertyVariables>
+                                <debezium.test.spanner.mode>real</debezium.test.spanner.mode>
+                            </systemPropertyVariables>
+                        </configuration>
                     </plugin>
                 </plugins>
             </build>
