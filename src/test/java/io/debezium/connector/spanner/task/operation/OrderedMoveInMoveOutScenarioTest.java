@@ -6,18 +6,24 @@
 package io.debezium.connector.spanner.task.operation;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.junit.jupiter.api.Test;
 
 import com.google.cloud.Timestamp;
 
+import io.debezium.connector.spanner.SpannerConnectorConfig;
 import io.debezium.connector.spanner.kafka.internal.model.MoveOutState;
 import io.debezium.connector.spanner.kafka.internal.model.PartitionState;
 import io.debezium.connector.spanner.kafka.internal.model.PartitionStateEnum;
 import io.debezium.connector.spanner.kafka.internal.model.TaskState;
+import io.debezium.connector.spanner.processor.SpannerEventDispatcher;
 import io.debezium.connector.spanner.task.TaskSyncContext;
 
 /**
@@ -56,6 +62,7 @@ import io.debezium.connector.spanner.task.TaskSyncContext;
 class OrderedMoveInMoveOutScenarioTest {
 
     private static final Timestamp TS0 = Timestamp.ofTimeSecondsAndNanos(1000, 0);
+    private static final Timestamp TS0_5 = Timestamp.ofTimeSecondsAndNanos(1500, 0);
     private static final Timestamp TS1 = Timestamp.ofTimeSecondsAndNanos(2000, 0);
 
     private TaskSyncContext context;
@@ -85,6 +92,41 @@ class OrderedMoveInMoveOutScenarioTest {
     /** Mirrors the periodic {@code processSyncEvent()} re-evaluation on the destination's task. */
     private void refresh() {
         context = new FindPartitionForStreamingOperation().doOperation(context);
+    }
+
+    /**
+     * Mirrors a source streaming forward on its own (e.g. via {@code onWindowAdvanced})
+     * independently of anything it publishes as a MoveOut - so a test can simulate "this
+     * source's own read position has passed some timestamp" without that timestamp
+     * necessarily being one it also moved a key range out at.
+     */
+    private void advanceProcessedTimestamp(String token, Timestamp ts) {
+        List<PartitionState> updated = context.getCurrentTaskState().getPartitions().stream()
+                .map(p -> p.getToken().equals(token) ? p.toBuilder().processedTimestamp(ts).build() : p)
+                .collect(Collectors.toList());
+        context = context.toBuilder()
+                .currentTaskState(context.getCurrentTaskState().toBuilder().partitions(updated).build())
+                .build();
+    }
+
+    /** Marks a partition FINISHED, as {@code SourceRecordUtils}/the streaming loop would on EOF. */
+    private void finish(String token, Timestamp finishedTimestamp) {
+        List<PartitionState> updated = context.getCurrentTaskState().getPartitions().stream()
+                .map(p -> p.getToken().equals(token)
+                        ? p.toBuilder().state(PartitionStateEnum.FINISHED).finishedTimestamp(finishedTimestamp).build()
+                        : p)
+                .collect(Collectors.toList());
+        context = context.toBuilder()
+                .currentTaskState(context.getCurrentTaskState().toBuilder().partitions(updated).build())
+                .build();
+    }
+
+    /** Mirrors the periodic {@link RemoveFinishedPartitionOperation} sweep. */
+    private void removeFinishedPartitions() {
+        SpannerEventDispatcher spannerEventDispatcher = mock(SpannerEventDispatcher.class);
+        SpannerConnectorConfig connectorConfig = mock(SpannerConnectorConfig.class);
+        lenient().when(connectorConfig.getFinishedPartitionDeletionDelay()).thenReturn(Duration.ZERO);
+        context = new RemoveFinishedPartitionOperation(spannerEventDispatcher, connectorConfig).doOperation(context);
     }
 
     private PartitionState partition(String token) {
@@ -147,9 +189,10 @@ class OrderedMoveInMoveOutScenarioTest {
         assertEquals(PartitionStateEnum.READY_FOR_STREAMING, partition("P0").getState(),
                 "P0 must continue immediately: P3's MoveOutState timestamp TS1 is already past TS0");
 
-        // Final state matches the design doc table exactly (P3 additionally retains its
-        // earlier TS0 move to P0, since a source never overwrites - only accumulates - its
-        // MoveOut history).
+        // Final state matches the design doc table exactly. P3's two MoveOutStates were
+        // seeded directly as preconditions (not produced by moveOut() calls in this test),
+        // so both are still present regardless of how MoveOutStateUpdateOperation itself
+        // decides whether an older entry can be dropped.
         assertEquals(1, partition("P1").getMoveOutStates().size());
         assertEquals(TS0, partition("P1").getMoveOutStates().get(0).getTimestamp());
         assertEquals(List.of("P0"), partition("P1").getMoveOutStates().get(0).getDestPartitionTokens());
@@ -159,5 +202,122 @@ class OrderedMoveInMoveOutScenarioTest {
         assertEquals(2, partition("P3").getMoveOutStates().size());
         assertEquals(TS1, partition("P3").getMoveOutStates().get(1).getTimestamp());
         assertEquals(List.of("P4"), partition("P3").getMoveOutStates().get(1).getDestPartitionTokens());
+    }
+
+    /**
+     * Verifies a subtle edge case in {@code FindPartitionForStreamingOperation}: given a
+     * MoveOut from P1 to P2 at T0, and a second, later MoveOut from P1 to P2 at T2 (T2 &gt;
+     * T0), the older T0 entry never incorrectly satisfies a later wait tied to T2.
+     */
+    @Test
+    void laterMoveInIsNotSatisfiedByAnOlderMoveOutToTheSameDestination() {
+        // P1 has already moved a key range out to P2 once before, at T0.
+        seedPartitions(
+                PartitionState.builder().token("P1").state(PartitionStateEnum.RUNNING).parents(Set.of())
+                        .moveOutStates(List.of(new MoveOutState(TS0, List.of("P2"))))
+                        .build(),
+                PartitionState.builder().token("P2").state(PartitionStateEnum.RUNNING).parents(Set.of()).build());
+
+        // P2 later receives a second, independent MoveIn from the same source P1, this
+        // time boundaried at T2 (TS1) - e.g. the key range moved back out and in again.
+        moveIn("P2", TS1, "00010", "P1");
+        assertEquals(PartitionStateEnum.CREATED, partition("P2").getState(),
+                "P2 must pause: P1's only recorded MoveOut (T0) predates this MoveIn's T2, so it cannot satisfy it");
+        assertEquals(TS1, partition("P2").getMoveInState().getTimestamp());
+
+        // P1's own read position advances to T0_5 (between T0 and T2) - independent of any
+        // MoveOut it has published.
+        advanceProcessedTimestamp("P1", TS0_5);
+
+        // At this intermediate point, refreshing must NOT resolve P2 - neither the older T0
+        // MoveOutState entry nor P1's advanced-but-still-short-of-T2 processedTimestamp is
+        // evidence that P1 has processed the T2 move.
+        refresh();
+        assertEquals(PartitionStateEnum.CREATED, partition("P2").getState(),
+                "P2 must remain paused: an older, same-destination MoveOutState (and P1 not yet reaching T2) must not mask the still-pending later move");
+
+        // P1 now actually publishes its second MoveOut, destined for P2, at T2.
+        moveOut("P1", TS1, "P2");
+        refresh();
+        assertEquals(PartitionStateEnum.READY_FOR_STREAMING, partition("P2").getState(),
+                "P2 must resume now that P1 has published the matching T2 MoveOutState");
+
+        // The T0 entry is gone: P2's own MoveIn already advanced its processedTimestamp past
+        // T0 (see MoveInStateUpdateOperation), so by the time this second moveOut() runs, the
+        // T0 entry has already resolved (MoveOutStateResolution) and is dropped in favor of
+        // the new T2 entry.
+        assertEquals(1, partition("P1").getMoveOutStates().size());
+        assertEquals(TS1, partition("P1").getMoveOutStates().get(0).getTimestamp());
+        assertEquals(List.of("P2"), partition("P1").getMoveOutStates().get(0).getDestPartitionTokens());
+    }
+
+    /**
+     * Verifies a same-timestamp race: D1 and D2 mutate the same key, and physically move
+     * from P1 to P2 at a shared commit timestamp T2 - P1 emits D1 (seq0) then its own
+     * MoveOut (seq1); P2 then sees the MoveIn (seq2) before D2 (seq3). P2 cannot process D2
+     * (seq3) until P1's own MoveOut (seq1) is on record, even while P1 is still working
+     * through T2 - otherwise D2 could be reordered ahead of D1 downstream.
+     */
+    @Test
+    void destinationCannotProceedUntilSourcesOwnMoveOutAtTheSharedTimestampIsProcessed() {
+        // Nothing has moved yet - P1 has no MoveOutState history at all.
+        seedPartitions(
+                PartitionState.builder().token("P1").state(PartitionStateEnum.RUNNING).parents(Set.of()).build(),
+                PartitionState.builder().token("P2").state(PartitionStateEnum.RUNNING).parents(Set.of()).build());
+
+        // P2 sees the MoveIn (seq2) at T2 - this can happen before or after P1 reaches its
+        // own MoveOut (seq1); either way P2 must pause until that MoveOut is on record.
+        moveIn("P2", TS1, "00002", "P1");
+        assertEquals(PartitionStateEnum.CREATED, partition("P2").getState(),
+                "P2 must pause: P1 has not recorded any MoveOut yet, let alone one at T2");
+
+        // P1 is still working through its T2 window - it has emitted D1 (seq0) downstream
+        // already (not modeled here, since it doesn't touch PartitionState) but has not
+        // yet reached/processed its own MoveOut record (seq1).
+        refresh();
+        assertEquals(PartitionStateEnum.CREATED, partition("P2").getState(),
+                "P2 must still be paused while P1 has processed D1 but not yet its own MoveOut - "
+                        + "otherwise P2 could read D2 (seq3) before D1 (seq0) is guaranteed emitted");
+
+        // P1 now reaches seq1 and records its MoveOut for T2, destined for P2.
+        moveOut("P1", TS1, "P2");
+        refresh();
+        assertEquals(PartitionStateEnum.READY_FOR_STREAMING, partition("P2").getState(),
+                "P2 may now proceed to read D2 (seq3) - by Spanner's own commit-sequence ordering, "
+                        + "P1 could not have emitted seq1 without D1 (seq0) already having been emitted");
+    }
+
+    /**
+     * Verifies that an unresolved {@link MoveOutState} entry survives a later, unrelated
+     * MoveOut recorded at a different timestamp - {@link MoveOutStateUpdateOperation} only
+     * drops an entry once its own destinations have caught up (see {@link
+     * MoveOutStateResolution}), never merely because a newer entry came in.
+     */
+    @Test
+    void unresolvedMoveOutEntryIsKeptAcrossANewerUnrelatedMove() {
+        // P2 hasn't discovered the dependency at all yet - no moveInState, no parents.
+        seedPartitions(
+                PartitionState.builder().token("P1").state(PartitionStateEnum.RUNNING).parents(Set.of()).build(),
+                PartitionState.builder().token("P2").state(PartitionStateEnum.RUNNING).parents(Set.of()).build(),
+                PartitionState.builder().token("P3").state(PartitionStateEnum.RUNNING).parents(Set.of()).build());
+
+        // P1 moves out to P2 at T0, then to the unrelated P3 at a later T1.
+        moveOut("P1", TS0, "P2");
+        moveOut("P1", TS1, "P3");
+
+        // P3 catches up to the move it actually depends on; P2 never does anything at all.
+        advanceProcessedTimestamp("P3", TS1);
+
+        // P1 finishes streaming its own key range and becomes eligible for deletion.
+        finish("P1", TS0);
+        removeFinishedPartitions();
+
+        // P2 only now gets around to processing the boundary and issuing its MoveIn from P1.
+        moveIn("P2", TS0, "00000", "P1");
+        refresh();
+
+        assertEquals(PartitionStateEnum.READY_FOR_STREAMING, partition("P2").getState(),
+                "P2 must resume once P1's T0 MoveOut is on record - if this fails, the T0 entry was pruned "
+                        + "before P2 ever caught up, so P1 was deleted and P2 has no source left to check");
     }
 }

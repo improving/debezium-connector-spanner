@@ -11,7 +11,6 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import org.slf4j.Logger;
 
@@ -63,7 +62,7 @@ public class RemoveFinishedPartitionOperation implements Operation {
 
                                 if (deletionTime.compareTo(currentTime) < 0) {
 
-                                    List<PartitionState> allPartitionStates = allPartitionStates(taskSyncContext);
+                                    List<PartitionState> allPartitionStates = PartitionStates.allPartitionStates(taskSyncContext);
 
                                     if (allChildrenFinished(allPartitionStates, partitionState.getToken())
                                             && moveOutDestinationsHaveResumed(allPartitionStates, partitionState)) {
@@ -108,19 +107,6 @@ public class RemoveFinishedPartitionOperation implements Operation {
                 .build();
     }
 
-    private static List<PartitionState> allPartitionStates(TaskSyncContext taskSyncContext) {
-        return Stream.concat(
-                Stream.concat(
-                        taskSyncContext.getTaskStates().values().stream()
-                                .flatMap(taskState -> taskState.getPartitions().stream()),
-                        taskSyncContext.getCurrentTaskState().getPartitions().stream()),
-                Stream.concat(
-                        taskSyncContext.getTaskStates().values().stream()
-                                .flatMap(taskState -> taskState.getSharedPartitions().stream()),
-                        taskSyncContext.getCurrentTaskState().getSharedPartitions().stream()))
-                .collect(Collectors.toList());
-    }
-
     private static boolean allChildrenFinished(List<PartitionState> allPartitionStates, String token) {
         Set<String> children = allPartitionStates.stream()
                 .filter(partitionState -> partitionState.getParents().contains(token))
@@ -154,7 +140,10 @@ public class RemoveFinishedPartitionOperation implements Operation {
      * <p>A source partition never pauses for its own MoveOut events, so it can accumulate
      * several independent, still-pending {@link MoveOutState} entries (to different destinations,
      * at different commit timestamps) over its lifetime - see {@code getMoveOutStates()}. Every
-     * entry must individually be resolved before the source can be deleted.
+     * entry must individually be resolved before the source can be deleted. {@link
+     * MoveOutStateUpdateOperation} prunes an entry as soon as it resolves (see {@link
+     * MoveOutStateResolution}), so in practice this list only ever holds genuinely outstanding
+     * entries.
      *
      * <p>This is purely additive for the immutable key range path: partitions created via
      * {@link ChildPartitionOperation} never populate {@code moveOutStates}, so this check
@@ -162,25 +151,8 @@ public class RemoveFinishedPartitionOperation implements Operation {
      * mutable key range support was added.
      */
     private static boolean moveOutDestinationsHaveResumed(List<PartitionState> allPartitionStates, PartitionState partitionState) {
-        for (MoveOutState moveOutState : partitionState.getMoveOutStates()) {
-            Timestamp moveOutTimestamp = moveOutState.getTimestamp();
-            for (String destToken : moveOutState.getDestPartitionTokens()) {
-                PartitionState dest = allPartitionStates.stream()
-                        .filter(p -> destToken.equals(p.getToken()))
-                        .findFirst()
-                        .orElse(null);
-                if (dest == null) {
-                    // Destination not tracked anywhere - nothing left depending on this source.
-                    continue;
-                }
-                boolean destHasReachedThisMove = dest.getProcessedTimestamp() != null
-                        && dest.getProcessedTimestamp().compareTo(moveOutTimestamp) >= 0;
-                if (!destHasReachedThisMove) {
-                    return false;
-                }
-            }
-        }
-        return true;
+        return partitionState.getMoveOutStates().stream()
+                .allMatch(moveOutState -> MoveOutStateResolution.allDestinationsHaveResumed(allPartitionStates, moveOutState));
     }
 
     @Override
