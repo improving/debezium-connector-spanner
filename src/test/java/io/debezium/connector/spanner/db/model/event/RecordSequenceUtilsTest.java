@@ -12,8 +12,10 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Verifies record_sequence handling against both real-world formats observed from Spanner: the
- * legacy "V1" plain hex value with no discriminator (e.g. {@code "00000001"}), and the "V2" hex
- * {@code "<hi>-<lo>"} composite (e.g. {@code "963d1af435fb3e79-00000000"}).
+ * unseparated plain hex value with no discriminator (e.g. {@code "00000001"}), seen on change
+ * streams that don't use {@code MUTABLE_KEY_RANGE} partitioning, and the separated hex
+ * {@code "<hi>-<lo>"} composite (e.g. {@code "963d1af435fb3e79-00000000"}), seen on
+ * {@code MUTABLE_KEY_RANGE} change streams.
  */
 class RecordSequenceUtilsTest {
 
@@ -84,37 +86,37 @@ class RecordSequenceUtilsTest {
     }
 
     /**
-     * V1 record_sequence values have no {@code "<hi>-<lo>"} separator at all - the whole string
-     * is the sequence number, with no discriminator to strip out.
+     * Unseparated record_sequence values have no {@code "<hi>-<lo>"} separator at all - the whole
+     * string is the sequence number, with no discriminator to strip out.
      */
     @Test
-    void parseSequenceNumberHandlesV1PlainHexFormat() {
+    void parseSequenceNumberHandlesUnseparatedPlainHexFormat() {
         assertEquals(1L, RecordSequenceUtils.parseSequenceNumber("00000001"));
     }
 
     /**
-     * A V1 value and an equivalent V2 value with an all-zero {@code hi} must parse to the same
-     * sequence number - a V1 value is just a V2 value with no discriminator.
+     * An unseparated value and an equivalent separated value with an all-zero {@code hi} must
+     * parse to the same sequence number - an unseparated value is just a separated value with no
+     * discriminator.
      */
     @Test
-    void v1AndEquivalentV2SequenceParseToTheSameSequenceNumber() {
+    void unseparatedAndEquivalentSeparatedSequenceParseToTheSameSequenceNumber() {
         assertEquals(RecordSequenceUtils.parseSequenceNumber("00000001"),
                 RecordSequenceUtils.parseSequenceNumber("0000000000000000-00000001"));
     }
 
     /**
-     * V1 values must also compare correctly against {@link RecordSequenceUtils#compare}, not
-     * just against themselves - mirrors {@link #distinguishesHexCompositesDifferingOnlyInUpperBitsOfDiscriminator}
-     * for the no-discriminator case: a V1 value and a V2 value sharing the same {@code lo} but
-     * differing in {@code hi} must not compare as equal.
+     * Unseparated values must also compare correctly against {@link RecordSequenceUtils#compare},
+     * not just against themselves. An unseparated value and a separated value sharing the same
+     * {@code lo} but differing in {@code hi} must not compare as equal.
      */
     @Test
-    void v1SequenceWithDifferentDiscriminatorThanV2DoesNotCompareEqual() {
-        String v1 = "00000001";
-        String v2WithNonZeroHi = "0000000000000001-00000001";
+    void unseparatedSequenceWithDifferentDiscriminatorThanSeparatedDoesNotCompareEqual() {
+        String unseparated = "00000001";
+        String separatedWithNonZeroHi = "0000000000000001-00000001";
 
-        assertTrue(RecordSequenceUtils.compare(v1, v2WithNonZeroHi) != 0,
-                "a V1 value (hi=0) must not compare equal to a V2 value with a non-zero hi, even with the same lo");
+        assertTrue(RecordSequenceUtils.compare(unseparated, separatedWithNonZeroHi) != 0,
+                "an unseparated value (hi=0) must not compare equal to a separated value with a non-zero hi, even with the same lo");
     }
 
     /**

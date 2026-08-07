@@ -6,9 +6,14 @@
 package io.debezium.connector.spanner.db.model.event;
 
 /**
- * Utilities for interpreting Spanner's {@code record_sequence} field, which is always a hex
- * {@code "<hi>-<lo>"} composite (e.g. {@code "963d1af435fb3e79-00000000"}), where {@code hi} is a
- * per-transaction discriminator and {@code lo} orders records within that transaction.
+ * Utilities for interpreting Spanner's {@code record_sequence} field, which comes in two
+ * observed formats depending on the change stream's partition mode: a plain hex number with no
+ * discriminator (e.g. {@code "00000001"}) on change streams that don't use
+ * {@code MUTABLE_KEY_RANGE} partitioning, and a hex {@code "<hi>-<lo>"} composite (e.g.
+ * {@code "963d1af435fb3e79-00000000"}) on {@code MUTABLE_KEY_RANGE} change streams, where
+ * {@code hi} is a per-transaction discriminator and {@code lo} orders records within that
+ * transaction. A plain (unseparated) value is treated as {@code hi=0}, i.e. as if it had no
+ * discriminator.
  */
 public final class RecordSequenceUtils {
 
@@ -17,7 +22,8 @@ public final class RecordSequenceUtils {
 
     /**
      * Splits a {@code record_sequence} value into its {@code hi}/{@code lo} unsigned 64-bit
-     * components.
+     * components. Handles both the unseparated plain-hex format (no {@code hi}, treated as
+     * {@code 0}) and the separated {@code "<hi>-<lo>"} composite format.
      */
     private static long[] splitHiLo(String sequence) {
         String[] parts = sequence.split("-", 2);
