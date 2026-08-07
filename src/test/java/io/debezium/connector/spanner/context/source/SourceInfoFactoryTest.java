@@ -61,7 +61,7 @@ class SourceInfoFactoryTest {
                 "testTag=test", false, streamEventMetadata);
 
         SourceInfo expected = new SourceInfo(connectorConfig, dataChangeEvent.getTableName(), recordTimestamp,
-                commitTimestamp.toSqlTimestamp().toInstant(), readAtTimestamp, serverTransactionId, recordSequence,
+                commitTimestamp.toSqlTimestamp().toInstant(), readAtTimestamp, serverTransactionId, recordSequence, null,
                 lowWatermark, numberRecordsInTransaction, "testTag=test", false,
                 ValueCaptureType.OLD_AND_NEW_VALUES.name(), "testToken", 0, false, 1L);
 
@@ -114,7 +114,7 @@ class SourceInfoFactoryTest {
 
         SourceInfo expected = new SourceInfo(connectorConfig, dataChangeEvent.getTableName(), recordTimestamp,
                 commitTimestamp.toSqlTimestamp().toInstant(), readAtTimestamp, serverTransactionId,
-                recordSequence,
+                recordSequence, null,
                 lowWatermark, numberRecordsInTransaction, "testTag=test", false,
                 ValueCaptureType.NEW_ROW_AND_OLD_VALUES.name(), "testToken", 0, false, 1L);
 
@@ -166,7 +166,7 @@ class SourceInfoFactoryTest {
                 "testTag=test", false, streamEventMetadata);
 
         SourceInfo expected = new SourceInfo(connectorConfig, dataChangeEvent.getTableName(), recordTimestamp,
-                commitTimestamp.toSqlTimestamp().toInstant(), readAtTimestamp, serverTransactionId, recordSequence,
+                commitTimestamp.toSqlTimestamp().toInstant(), readAtTimestamp, serverTransactionId, recordSequence, null,
                 lowWatermark, numberRecordsInTransaction, "testTag=test", false,
                 ValueCaptureType.NEW_ROW.name(), "testToken", 0, false, 1L);
 
@@ -220,7 +220,7 @@ class SourceInfoFactoryTest {
 
         SourceInfo expected = new SourceInfo(connectorConfig, dataChangeEvent.getTableName(), recordTimestamp,
                 commitTimestamp.toSqlTimestamp().toInstant(), readAtTimestamp, serverTransactionId,
-                recordSequence,
+                recordSequence, null,
                 lowWatermark, numberRecordsInTransaction, "testTag=test", false,
                 ValueCaptureType.NEW_VALUES.name(), "testToken", 0, false, 1L);
 
