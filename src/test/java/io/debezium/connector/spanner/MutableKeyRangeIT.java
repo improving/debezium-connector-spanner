@@ -103,6 +103,14 @@ public class MutableKeyRangeIT extends AbstractSpannerConnectorIT {
      */
     private static final int WINDOW_MINUTES = 1;
 
+    /**
+     * Heartbeats are what advance the committed offset once a window/period has no new data.
+     * The base config's 300s heartbeat is too slow for the short sliding window used here, so
+     * shorten it to make sure the offset can advance past a window boundary within the test.
+     */
+    private static final String HEARTBEAT_INTERVAL_MS = "5000";
+    private static final String OFFSET_FLUSH_INTERVAL_MS = "1000";
+
     private static boolean setupSucceeded;
 
     @BeforeAll
@@ -179,11 +187,8 @@ public class MutableKeyRangeIT extends AbstractSpannerConnectorIT {
                 .with("gcp.spanner.mutable.window.minutes", WINDOW_MINUTES)
                 .with("offset.storage", "org.apache.kafka.connect.storage.FileOffsetBackingStore")
                 .with("offset.storage.file.filename", offsetFile(connectorName))
-                // Heartbeats are what advance the committed offset once a window/period has no new data.
-                // The base config's 300s heartbeat is too slow for the short sliding window used here,
-                // so shorten it to make sure the offset can advance past a window boundary within the test.
-                .with("heartbeat.interval.ms", "5000")
-                .with("offset.flush.interval.ms", "1000")
+                .with("heartbeat.interval.ms", HEARTBEAT_INTERVAL_MS)
+                .with("offset.flush.interval.ms", OFFSET_FLUSH_INTERVAL_MS)
                 .build();
     }
 

@@ -40,8 +40,6 @@
         <docker.db>gcr.io/cloud-spanner-emulator/emulator</docker.db>
         <docker.filter>${docker.db},${docker.repository.name}:${docker.tag.name}</docker.filter>
         <docker.skip>false</docker.skip>
-        <!-- Independent from docker.skip so a real-Spanner IT run (see the real-spanner profile below)
-             can skip only the local Spanner emulator container while still building/pushing images. -->
         <docker.skip.emulator>${docker.skip}</docker.skip.emulator>
         <docker.showLogs>true</docker.showLogs>
 
