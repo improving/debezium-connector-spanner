@@ -258,7 +258,10 @@ public class MutableKeyRangeIT extends AbstractSpannerConnectorIT {
 
         start(SpannerConnector.class, config);
         assertConnectorIsRunning();
-        List<SourceRecord> after = consumeRecordsForTopic(config, TABLE_RESTART, 1);
+        // At-least-once semantics mean the replayed id=10 record can legitimately arrive before
+        // id=11, so ask for up to 2 records: if id=10 is replayed we need both to see id=11; if it
+        // isn't, we'll only get 1 and simply wait out the remaining budget before returning it.
+        List<SourceRecord> after = consumeRecordsForTopic(config, TABLE_RESTART, 2);
 
         assertThat(after).as("Should have at least 1 record after restart").hasSizeGreaterThanOrEqualTo(1);
         for (SourceRecord r : after) {
