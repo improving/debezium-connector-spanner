@@ -65,6 +65,10 @@ public class Connection {
     private static final String CREDENTIALS_JSON_PROPERTY = "gcp.spanner.credentials.json";
     private static final String HOST_PROPERTY = "gcp.spanner.host";
 
+    private static long ddlWaitTimeSeconds() {
+        return Long.parseLong(System.getProperty("debezium.test.spanner.ddl.waittime", "60"));
+    }
+
     public DatabaseClient databaseClient;
     private Spanner spanner;
     private SchemaDao schemaDao;
@@ -144,7 +148,7 @@ public class Connection {
             InterruptedException {
         this.updateDDL(List.of("create change stream " + changeStreamName + " for " +
                 (tables.length == 0 ? "ALL" : String.join(",", tables))));
-        await().atMost(Duration.ofSeconds(60)).until(() -> isStreamExist(changeStreamName));
+        await().atMost(Duration.ofSeconds(ddlWaitTimeSeconds())).until(() -> isStreamExist(changeStreamName));
     }
 
     public void createMutableKeyRangeChangeStream(String changeStreamName, String... tables) throws ExecutionException,
@@ -152,7 +156,7 @@ public class Connection {
         this.updateDDL(List.of("create change stream " + changeStreamName + " for " +
                 (tables.length == 0 ? "ALL" : String.join(",", tables)) +
                 " OPTIONS (partition_mode = 'MUTABLE_KEY_RANGE')"));
-        await().atMost(Duration.ofSeconds(60)).until(() -> isStreamExist(changeStreamName));
+        await().atMost(Duration.ofSeconds(ddlWaitTimeSeconds())).until(() -> isStreamExist(changeStreamName));
     }
 
     /**
@@ -218,7 +222,7 @@ public class Connection {
                 " OPTIONS (\n" +
                 "            value_capture_type = 'NEW_VALUES'\n" +
                 "        ) "));
-        await().atMost(Duration.ofSeconds(60)).until(() -> isStreamExist(changeStreamName));
+        await().atMost(Duration.ofSeconds(ddlWaitTimeSeconds())).until(() -> isStreamExist(changeStreamName));
     }
 
     public void createChangeStreamNewRow(String changeStreamName, String... tables) throws ExecutionException,
@@ -228,7 +232,7 @@ public class Connection {
                 " OPTIONS (\n" +
                 "            value_capture_type = 'NEW_ROW'\n" +
                 "        ) "));
-        await().atMost(Duration.ofSeconds(60)).until(() -> isStreamExist(changeStreamName));
+        await().atMost(Duration.ofSeconds(ddlWaitTimeSeconds())).until(() -> isStreamExist(changeStreamName));
     }
 
     private String createInstance() {

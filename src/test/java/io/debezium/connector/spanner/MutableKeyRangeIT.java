@@ -73,6 +73,20 @@ public class MutableKeyRangeIT extends AbstractSpannerConnectorIT {
             ? createBaseConfigBuilder(database, true).build()
             : AbstractSpannerConnectorIT.baseConfig;
 
+    static {
+        // Real Cloud Spanner change-stream reads plus this connector's task-sync/leader-election
+        // bootstrap add latency the local emulator doesn't have, so the debezium-embedded defaults
+        // (30s wait for the first record, then up to 3 x 10s of additional polling) are sometimes
+        // too tight here. Raise the defaults for real-Spanner runs so the suite is stable without
+        // requiring extra -D flags on the command line; explicit -D overrides still win.
+        if (Connection.isRealSpanner()) {
+            System.setProperty("debezium.test.records.waittime",
+                    System.getProperty("debezium.test.records.waittime", "60"));
+            System.setProperty("debezium.test.records.waittime.after.nulls",
+                    System.getProperty("debezium.test.records.waittime.after.nulls", "5"));
+        }
+    }
+
     private static final String TABLE_CRUD = "mkr_crud_table";
     private static final String TABLE_RESTART = "mkr_restart_table";
     private static final String TABLE_WINDOW = "mkr_window_table";
@@ -178,6 +192,27 @@ public class MutableKeyRangeIT extends AbstractSpannerConnectorIT {
     }
 
     /**
+     * Polls for at least {@code minExpectedCount} records on {@code table}'s topic, accumulating
+     * across repeated short polls until the deadline elapses. A single {@code waitForAvailableRecords}
+     * + {@code consumeRecordsByTopic} call can race ahead of a real Cloud Spanner partition's
+     * discovery/streaming latency (which varies run to run), so retrying within the overall budget
+     * is more robust than a single one-shot wait.
+     */
+    private List<SourceRecord> consumeRecordsForTopic(Configuration config, String table, int minExpectedCount) throws InterruptedException {
+        List<SourceRecord> records = new ArrayList<>();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(waitTimeForRecords());
+        do {
+            waitForAvailableRecords(5, TimeUnit.SECONDS);
+            List<SourceRecord> polled = consumeRecordsByTopic(minExpectedCount - records.size(), false)
+                    .recordsForTopic(getTopicName(config, table));
+            if (polled != null) {
+                records.addAll(polled);
+            }
+        } while (records.size() < minExpectedCount && System.nanoTime() < deadline);
+        return records;
+    }
+
+    /**
      * Verifies that INSERT / UPDATE / DELETE produce c / u / d / tombstone records in order.
      */
     @Test
@@ -212,9 +247,7 @@ public class MutableKeyRangeIT extends AbstractSpannerConnectorIT {
         assertConnectorIsRunning();
 
         databaseConnection.executeUpdate("INSERT INTO " + TABLE_RESTART + " (id, name) VALUES (10, 'pre-restart')");
-        waitForAvailableRecords(waitTimeForRecords(), TimeUnit.SECONDS);
-        List<SourceRecord> before = consumeRecordsByTopic(5, false)
-                .recordsForTopic(getTopicName(config, TABLE_RESTART));
+        List<SourceRecord> before = consumeRecordsForTopic(config, TABLE_RESTART, 1);
         assertThat(before).as("Should have exactly 1 record before restart").hasSize(1);
         assertThat(op(before, 0)).isEqualTo("c");
 
@@ -225,9 +258,7 @@ public class MutableKeyRangeIT extends AbstractSpannerConnectorIT {
 
         start(SpannerConnector.class, config);
         assertConnectorIsRunning();
-        waitForAvailableRecords(waitTimeForRecords(), TimeUnit.SECONDS);
-        List<SourceRecord> after = consumeRecordsByTopic(5, false)
-                .recordsForTopic(getTopicName(config, TABLE_RESTART));
+        List<SourceRecord> after = consumeRecordsForTopic(config, TABLE_RESTART, 1);
 
         assertThat(after).as("Should have at least 1 record after restart").hasSizeGreaterThanOrEqualTo(1);
         for (SourceRecord r : after) {
