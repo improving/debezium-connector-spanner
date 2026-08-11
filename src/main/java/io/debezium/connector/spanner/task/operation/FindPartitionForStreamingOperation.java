@@ -60,8 +60,7 @@ public class FindPartitionForStreamingOperation implements Operation {
                                         taskSyncContext.getTaskUid(), partitionState.getToken(), partitionState.getParents());
                             }
                         }
-                        else if (finishedPartitions.containsAll(partitionState.getParents())
-                                || (isMutableKeyRange && atLeastOneParentExists(taskSyncContext, partitionState.getParents()))) {
+                        else if (finishedPartitions.containsAll(partitionState.getParents()) || isMutableKeyRange) {
                             takePartitionForStreaming = true;
                             LOGGER.info("Task takes partition for streaming, taskUid: {}, partition {}",
                                     taskSyncContext.getTaskUid(), partitionState.getToken());
