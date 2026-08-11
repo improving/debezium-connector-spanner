@@ -16,6 +16,7 @@ import java.util.concurrent.TimeUnit;
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.source.SourceRecord;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
@@ -24,19 +25,20 @@ import io.debezium.config.Configuration;
 import io.debezium.connector.spanner.util.Connection;
 
 /**
- * The three real-Cloud-Spanner placement-move scenarios, sharing a single {@code east}/
- * {@code west} placement pair provisioned once for the whole class, since
- * {@code DROP PLACEMENT} alone can take minutes to hours on the shared test instance. Each
- * test still creates and drops its own tables/change stream inline - only the placements are
- * shared.
+ * The real-Cloud-Spanner placement-move scenarios, sharing a single {@code east}/{@code west}
+ * placement pair provisioned once for the whole class, since {@code DROP PLACEMENT} alone
+ * can take minutes to hours on the shared test instance. Each test still creates and drops
+ * its own tables/change stream inline - only the placements are shared.
  *
  * <p>Needs geo-partitioning, which only a real Cloud Spanner instance supports. Expects the
  * pre-provisioned {@code east-partition}/{@code west-partition} instance partitions (see
  * {@code doc/real-spanner-testing.md}).
  */
 @RealSpannerCompatible
-@Disabled("Temporarily disabled - DROP PLACEMENT alone can take minutes to hours on the shared "
-        + "real-Spanner test instance, making iteration on this suite expensive; re-enable once stable.")
+@Disabled("DROP PLACEMENT alone can take minutes to hours on the shared real-Spanner test "
+        + "instance, making iteration on this suite expensive. Also requires the "
+        + "east-partition/west-partition instance partitions to be pre-provisioned "
+        + "(see doc/real-spanner-testing.md).")
 public class PlacementMoveIT extends AbstractSpannerConnectorIT {
 
     /**
@@ -55,6 +57,9 @@ public class PlacementMoveIT extends AbstractSpannerConnectorIT {
 
     @BeforeAll
     static void setup() throws Exception {
+        Assumptions.assumeTrue(Connection.isRealSpanner(),
+                "Skipping: PlacementMoveIT needs geo-partitioning, which only a real Cloud Spanner "
+                        + "instance supports. Run with -Dspanner.test.real=true.");
         databaseConnection.createPlacement(placementEast, "east-partition");
         databaseConnection.createPlacement(placementWest, "west-partition");
     }
@@ -79,15 +84,16 @@ public class PlacementMoveIT extends AbstractSpannerConnectorIT {
         databaseConnection.createTable(tableName
                 + "(id INT64 NOT NULL, region STRING(MAX) NOT NULL PLACEMENT KEY, value STRING(MAX)) "
                 + "PRIMARY KEY (id)");
-        // The emulator rejects this DDL outright.
         databaseConnection.createMutableKeyRangeChangeStream(changeStreamName, tableName);
         try {
             final Configuration config = Configuration.copy(baseConfig)
                     .with("gcp.spanner.change.stream", changeStreamName)
                     .with("name", tableName + "_test")
                     .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()))
+                    .with("gcp.spanner.mutable.window.minutes", 1)
                     .build();
 
+            clearKafkaTopics();
             initializeConnectorTestFramework();
             start(SpannerConnector.class, config);
             assertConnectorIsRunning();
@@ -127,14 +133,8 @@ public class PlacementMoveIT extends AbstractSpannerConnectorIT {
             long followUpTimestamp = followUpRecord.getStruct("source").getInt64("ts_ms");
             assertThat(followUpTimestamp).isGreaterThan(moveTimestamp);
 
-            // TODO(blocked): PartitionEventEvent now has a real dispatch case in
-            // SpannerStreamingChangeEventSource (it drives internal move-out/processed-timestamp
-            // bookkeeping via PartitionManager), so it's no longer silently dropped at the
-            // dispatch loop. It still isn't surfaced as an inspectable Kafka record or SourceInfo
-            // field, though, so asserting directly on move_in/move_out event content (source and
-            // destination partition tokens) still isn't possible through the normal SourceRecord
-            // API - only its downstream ordering effect, as asserted above, is currently
-            // test-observable.
+            // The connector doesn't expose move events as Kafka records or a SourceInfo field,
+            // so only this downstream ordering effect is verifiable here, not move-event content.
 
             stopConnector();
             assertConnectorNotRunning();
@@ -188,15 +188,14 @@ public class PlacementMoveIT extends AbstractSpannerConnectorIT {
                     .with("gcp.spanner.change.stream", interleavedChangeStreamName)
                     .with("name", interleavedParentTableName + "_test")
                     .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()))
+                    .with("gcp.spanner.mutable.window.minutes", 1)
                     .build();
 
+            clearKafkaTopics();
             initializeConnectorTestFramework();
             start(SpannerConnector.class, config);
             assertConnectorIsRunning();
 
-            // Spanner allows only a single INSERT or DELETE DML statement per transaction on
-            // placement tables during preview, so the parent and child inserts must be separate
-            // transactions here, unlike the non-placement equivalent in InterleavedTableIT.
             databaseConnection.executeUpdate(
                     "INSERT INTO " + interleavedParentTableName + "(id, region, name) VALUES (1, '" + placementEast + "', 'Alice')");
             databaseConnection.executeUpdate(
@@ -214,15 +213,12 @@ public class PlacementMoveIT extends AbstractSpannerConnectorIT {
             Struct parentMoveRecord = (Struct) parentRecords.get(1).value(); // after the insert
             assertThat(parentMoveRecord.getStruct("after").getString("region")).isEqualTo(placementWest);
 
-            // See this method's own javadoc for the open design question this test exists to
-            // answer regarding whether the child produces its own signal on a parent move.
-
-            // Regardless of which answer that resolves to, a subsequent child mutation must
-            // be correctly ordered after the parent's move.
             databaseConnection.executeUpdate(
                     "UPDATE " + interleavedChildTableName + " SET value = 'Item1-updated' WHERE id = 1 AND child_id = 100");
 
-            List<SourceRecord> childRecords = sourceRecords.recordsForTopic(getTopicName(config, interleavedChildTableName));
+            assertTrue(waitForAvailableRecords(waitTimeForRecords(), TimeUnit.SECONDS));
+            SourceRecords childUpdateRecords = consumeRecordsByTopic(10, false);
+            List<SourceRecord> childRecords = childUpdateRecords.recordsForTopic(getTopicName(config, interleavedChildTableName));
             Struct childUpdateRecord = (Struct) childRecords.get(childRecords.size() - 1).value();
             long parentMoveTimestamp = parentMoveRecord.getStruct("source").getInt64("ts_ms");
             long childUpdateTimestamp = childUpdateRecord.getStruct("source").getInt64("ts_ms");
@@ -263,17 +259,14 @@ public class PlacementMoveIT extends AbstractSpannerConnectorIT {
                     .with("gcp.spanner.change.stream", cascadeChangeStreamName)
                     .with("name", cascadeParentTableName + "_test")
                     .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()))
+                    .with("gcp.spanner.mutable.window.minutes", 1)
                     .build();
 
+            clearKafkaTopics();
             initializeConnectorTestFramework();
             start(SpannerConnector.class, config);
             assertConnectorIsRunning();
 
-            // Spanner allows only a single INSERT or DELETE DML statement per transaction on
-            // placement tables during preview, so the parent and child inserts must be separate
-            // transactions - unlike InterleavedTableIT's non-placement equivalent, which combines
-            // them into one. The test never asserts the two inserts share a transaction ID (only
-            // the cascaded deletes below do), so splitting them doesn't affect what's under test.
             databaseConnection.executeUpdate(
                     "INSERT INTO " + cascadeParentTableName + "(id, region, name) VALUES (1, '" + placementEast + "', 'Alice')");
             databaseConnection.executeUpdate(
@@ -305,8 +298,7 @@ public class PlacementMoveIT extends AbstractSpannerConnectorIT {
             assertThat(parentDelete.get("op")).isEqualTo("d");
             assertThat(childDelete.get("op")).isEqualTo("d");
 
-            // Same correlation check InterleavedTableIT already established for the
-            // non-placement case - both deletes must share one transaction identity, even
+            // Both deletes must share one transaction identity, even
             // though the parent had just moved placements.
             assertThat(childDelete.getStruct("source").getString("server_transaction_id"))
                     .isEqualTo(parentDelete.getStruct("source").getString("server_transaction_id"));

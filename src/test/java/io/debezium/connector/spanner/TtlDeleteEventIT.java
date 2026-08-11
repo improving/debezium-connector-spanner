@@ -15,12 +15,12 @@ import java.util.concurrent.TimeUnit;
 
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.source.SourceRecord;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Disabled;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import io.debezium.config.Configuration;
+import io.debezium.connector.spanner.util.PartitionMode;
 
 /**
  * There are exactly four sources a change stream watches:
@@ -30,61 +30,65 @@ import io.debezium.config.Configuration;
  * {@code system_transaction: true} on the emitted record's source block, which nothing
  * currently tests (every other scenario is a normal user-issued DML statement, so it's
  * always {@code false}).
+ *
+ * <p>Parameterized across both partition modes; each test creates and drops its own
+ * partition-mode-suffixed table/change stream per invocation.
  */
 @Disabled("Blocked on TTL eviction never running in the Spanner emulator within any "
         + "test-practical window")
 public class TtlDeleteEventIT extends AbstractSpannerConnectorIT {
 
-    private static final String tableName = "ttl_delete_event_table";
-    private static final String changeStreamName = "ttlDeleteEventStream";
+    private static final String tableNamePrefix = "ttl_delete_event_table";
+    private static final String changeStreamNamePrefix = "ttlDeleteEventStream";
 
-    @BeforeAll
-    static void setup() throws Exception {
+    @ParameterizedTest
+    @EnumSource(PartitionMode.class)
+    public void shouldEmitDeleteAsSystemTransactionWhenRowExpiresViaTtl(PartitionMode partitionMode) throws Exception {
+        String tableName = tableNamePrefix + "_" + partitionMode.name().toLowerCase();
+        String changeStreamName = changeStreamNamePrefix + partitionMode.name();
         databaseConnection.createTable(tableName
                 + "(id INT64, value STRING(100), expire_at TIMESTAMP NOT NULL) PRIMARY KEY (id), "
                 + "ROW DELETION POLICY (OLDER_THAN(expire_at, INTERVAL 1 DAY))");
-        databaseConnection.createChangeStream(changeStreamName, tableName);
-    }
+        databaseConnection.createChangeStream(changeStreamName, partitionMode, tableName);
+        try {
+            final Configuration config = Configuration.copy(baseConfig)
+                    .with("gcp.spanner.change.stream", changeStreamName)
+                    .with("name", tableName + "_test")
+                    .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()))
+                    .build();
 
-    @AfterAll
-    static void clear() throws InterruptedException {
-        databaseConnection.dropChangeStream(changeStreamName);
-        databaseConnection.dropTable(tableName);
-    }
+            clearKafkaTopics();
+            initializeConnectorTestFramework();
+            start(SpannerConnector.class, config);
+            assertConnectorIsRunning();
 
-    @Test
-    public void shouldEmitDeleteAsSystemTransactionWhenRowExpiresViaTtl() throws Exception {
-        final Configuration config = Configuration.copy(baseConfig)
-                .with("gcp.spanner.change.stream", changeStreamName)
-                .with("name", tableName + "_test")
-                .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()))
-                .build();
+            // expire_at is already two days in the past, so the row is immediately eligible
+            // for TTL garbage collection - on real Spanner, GC runs on its own schedule
+            // (typically within ~72 hours), not on insert.
+            databaseConnection.executeUpdate(
+                    "INSERT INTO " + tableName + "(id, value, expire_at) VALUES ("
+                            + "1, 'expires-soon', TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 DAY))");
 
-        initializeConnectorTestFramework();
-        start(SpannerConnector.class, config);
-        assertConnectorIsRunning();
+            assertTrue(waitForAvailableRecords(waitTimeForRecords(), TimeUnit.SECONDS));
+            SourceRecords sourceRecords = consumeRecordsByTopic(10, false);
+            List<SourceRecord> records = sourceRecords.recordsForTopic(getTopicName(config, tableName));
+            assertThat(records).hasSize(3); // insert + TTL-triggered delete + tombstone
 
-        // expire_at is already two days in the past, so the row is immediately eligible
-        // for TTL garbage collection - on real Spanner, GC runs on its own schedule
-        // (typically within ~72 hours), not on insert.
-        databaseConnection.executeUpdate(
-                "INSERT INTO " + tableName + "(id, value, expire_at) VALUES ("
-                        + "1, 'expires-soon', TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 DAY))");
+            Struct ttlDelete = (Struct) records.get(1).value();
+            assertThat(ttlDelete.get("op")).isEqualTo("d");
 
-        assertTrue(waitForAvailableRecords(waitTimeForRecords(), TimeUnit.SECONDS));
-        SourceRecords sourceRecords = consumeRecordsByTopic(10, false);
-        List<SourceRecord> records = sourceRecords.recordsForTopic(getTopicName(config, tableName));
-        assertThat(records).hasSize(3); // insert + TTL-triggered delete + tombstone
+            // The one assertion this whole test exists for: a TTL-triggered delete is the only
+            // documented source of a positive system_transaction, distinguishing it from every
+            // other (user-issued) DML statement in this test suite.
+            assertThat(ttlDelete.getStruct("source").getBoolean("system_transaction")).isTrue();
 
-        Struct ttlDelete = (Struct) records.get(1).value();
-        assertThat(ttlDelete.get("op")).isEqualTo("d");
-
-        // The one assertion this whole test exists for: a TTL-triggered delete is the only
-        // documented source of a positive system_transaction, distinguishing it from every
-        // other (user-issued) DML statement in this test suite.
-        assertThat(ttlDelete.getStruct("source").getBoolean("system_transaction")).isTrue();
-
-        stopConnector();
-        assertConnectorNotRunning();
+            stopConnector();
+            assertConnectorNotRunning();
+        }
+        finally {
+            stopConnector();
+            databaseConnection.dropChangeStream(changeStreamName);
+            databaseConnection.dropTable(tableName);
+        }
     }
 }

@@ -36,25 +36,20 @@ import io.debezium.util.Testing;
  * Integration tests for mutable key range change streams.
  *
  * <p>This test is {@link RealSpannerCompatible}: when {@code -Dspanner.test.real=true} is passed it
- * runs against a real Cloud Spanner instance; otherwise it runs against the local emulator and is
- * reported as <em>skipped</em> (not failed) because the emulator does not yet support
- * {@code MUTABLE_KEY_RANGE} change streams.
+ * runs against a real Cloud Spanner instance; otherwise it runs against the local emulator, which
+ * supports {@code MUTABLE_KEY_RANGE} change streams directly. The forced-key-range-split tests
+ * ({@link #shouldPreserveOrderAcrossForcedKeyRangeSplit} and
+ * {@link #shouldNotLoseOrReorderEventsWhenStoppedDuringForcedKeyRangeSplit}) are the exception -
+ * they self-skip on the emulator, which doesn't implement the {@code AddSplitPoints} admin RPC
+ * that {@link Connection#forceSplit} relies on.
  *
- * <p>Run the whole suite (old tests on the emulator, this test on real Spanner) with a single
- * command:
+ * <p>Run the whole suite against real Spanner with:
  * <pre>
  *   mvn verify \
  *     -Dspanner.test.real=true \
  *     -Dgcp.spanner.project.id=YOUR_PROJECT \
  *     -Dgcp.spanner.instance.id=YOUR_INSTANCE \
  *     -Dgcp.spanner.credentials.path=/path/to/key.json
- * </pre>
- *
- * <p>Run against Spanner Omni:
- * <pre>
- *   -Dspanner.type=OMNI
- *   -Dgcp.spanner.host=https://your-omni-host:15000
- *   -Dspanner.omni.use.plaintext=true          # or use mTLS cert/key properties
  * </pre>
  *
  * <p>WINDOW_MINUTES is set to 1 so the sliding-window processedTimestamp
@@ -362,6 +357,10 @@ public class MutableKeyRangeIT extends AbstractSpannerConnectorIT {
      */
     @Test
     void shouldPreserveOrderAcrossForcedKeyRangeSplit() throws InterruptedException, ExecutionException {
+        Assumptions.assumeTrue(Connection.isRealSpanner(),
+                "Skipping: the local Spanner emulator doesn't implement the AddSplitPoints admin RPC "
+                        + "(UNIMPLEMENTED) that forceSplit relies on. Run with -Dspanner.test.real=true "
+                        + "to exercise this test.");
         createMutableKeyRangeTableAndStream(TABLE_ORDER, STREAM_ORDER);
         try {
             Configuration config = buildConfig(TABLE_ORDER + "_connector", STREAM_ORDER);
@@ -439,6 +438,10 @@ public class MutableKeyRangeIT extends AbstractSpannerConnectorIT {
      */
     @Test
     void shouldNotLoseOrReorderEventsWhenStoppedDuringForcedKeyRangeSplit() throws InterruptedException, ExecutionException {
+        Assumptions.assumeTrue(Connection.isRealSpanner(),
+                "Skipping: the local Spanner emulator doesn't implement the AddSplitPoints admin RPC "
+                        + "(UNIMPLEMENTED) that forceSplit relies on. Run with -Dspanner.test.real=true "
+                        + "to exercise this test.");
         createMutableKeyRangeTableAndStream(TABLE_MOVE_IN_RESTART, STREAM_MOVE_IN_RESTART);
         try {
             Configuration config = buildConfig(TABLE_MOVE_IN_RESTART + "_connector", STREAM_MOVE_IN_RESTART);

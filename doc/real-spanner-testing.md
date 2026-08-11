@@ -64,7 +64,9 @@ rejects creating one that shares a config with another instance partition
 on the same instance, including the instance's own default partition. On a
 shared instance, some configs may already be taken by unrelated instance
 partitions - check `gcloud spanner instance-partitions list` first and swap
-in any unused `nam*` config if the ones below collide:
+in any unused `nam*` config if the ones below collide (on `spanner-kafka-connector`,
+`nam10` is already taken by the instance's own default partition, so
+`east-partition`/`west-partition` there use `nam3`/`nam9` instead):
 
 ```bash
 gcloud spanner instance-partitions create east-partition \
@@ -73,7 +75,7 @@ gcloud spanner instance-partitions create east-partition \
 
 gcloud spanner instance-partitions create west-partition \
   --instance=<instance-id> --project=improvingvancouver \
-  --config=nam10 --nodes=1 --description="west-placement-testing"
+  --config=nam9 --nodes=1 --description="west-placement-testing"
 ```
 
 Verify:

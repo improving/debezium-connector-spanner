@@ -223,97 +223,84 @@ public class Connection {
         }
     }
 
-    public void createChangeStreamNewValue(String changeStreamName, String... tables) throws ExecutionException,
-            InterruptedException {
+    public void createChangeStreamNewValue(String changeStreamName, PartitionMode partitionMode, String... tables)
+            throws ExecutionException, InterruptedException {
+        createChangeStreamWithValueCaptureType(changeStreamName, "NEW_VALUES", partitionMode, tables);
+    }
+
+    public void createChangeStreamNewRow(String changeStreamName, PartitionMode partitionMode, String... tables)
+            throws ExecutionException, InterruptedException {
+        createChangeStreamWithValueCaptureType(changeStreamName, "NEW_ROW", partitionMode, tables);
+    }
+
+    public void createChangeStreamNewRowAndOldValues(String changeStreamName, PartitionMode partitionMode, String... tables)
+            throws ExecutionException, InterruptedException {
+        createChangeStreamWithValueCaptureType(changeStreamName, "NEW_ROW_AND_OLD_VALUES", partitionMode, tables);
+    }
+
+    /**
+     * Shared by the {@code value_capture_type} variants above. Omits {@code partition_mode}
+     * entirely for {@link PartitionMode#IMMUTABLE_KEY_RANGE} - the emulator's DDL parser rejects
+     * that option outright even when the value requested is the documented default (see
+     * {@link #createChangeStream(String, PartitionMode, String...)}).
+     */
+    private void createChangeStreamWithValueCaptureType(String changeStreamName, String valueCaptureType,
+                                                        PartitionMode partitionMode, String... tables)
+            throws ExecutionException, InterruptedException {
         this.updateDDL(List.of("create change stream " + changeStreamName + " for " +
                 (tables.length == 0 ? "ALL" : String.join(",", tables)) +
                 " OPTIONS (\n" +
-                "            value_capture_type = 'NEW_VALUES'\n" +
+                "            value_capture_type = '" + valueCaptureType + "',\n" +
+                "            partition_mode = '" + partitionMode.name() + "'\n" +
                 "        ) "));
         await().atMost(Duration.ofSeconds(ddlWaitTimeSeconds())).until(() -> streamExists(changeStreamName));
     }
 
-    public void createChangeStreamNewRow(String changeStreamName, String... tables) throws ExecutionException,
-            InterruptedException {
+    public void createChangeStreamExcludeDelete(String changeStreamName, PartitionMode partitionMode, String... tables)
+            throws ExecutionException, InterruptedException {
+        createChangeStreamWithBooleanOption(changeStreamName, "exclude_delete", partitionMode, tables);
+    }
+
+    public void createChangeStreamExcludeInsert(String changeStreamName, PartitionMode partitionMode, String... tables)
+            throws ExecutionException, InterruptedException {
+        createChangeStreamWithBooleanOption(changeStreamName, "exclude_insert", partitionMode, tables);
+    }
+
+    public void createChangeStreamExcludeUpdate(String changeStreamName, PartitionMode partitionMode, String... tables)
+            throws ExecutionException, InterruptedException {
+        createChangeStreamWithBooleanOption(changeStreamName, "exclude_update", partitionMode, tables);
+    }
+
+    public void createChangeStreamAllowTxnExclusion(String changeStreamName, PartitionMode partitionMode, String... tables)
+            throws ExecutionException, InterruptedException {
+        createChangeStreamWithBooleanOption(changeStreamName, "allow_txn_exclusion", partitionMode, tables);
+    }
+
+    /**
+     * Shared by the boolean-flag {@code value_capture_type}-independent options above. Omits
+     * {@code partition_mode} entirely for {@link PartitionMode#IMMUTABLE_KEY_RANGE} - the
+     * emulator's DDL parser rejects that option outright even when the value requested is the
+     * documented default (see {@link #createChangeStream(String, PartitionMode, String...)}).
+     */
+    private void createChangeStreamWithBooleanOption(String changeStreamName, String optionName,
+                                                     PartitionMode partitionMode, String... tables)
+            throws ExecutionException, InterruptedException {
         this.updateDDL(List.of("create change stream " + changeStreamName + " for " +
                 (tables.length == 0 ? "ALL" : String.join(",", tables)) +
                 " OPTIONS (\n" +
-                "            value_capture_type = 'NEW_ROW'\n" +
+                "            " + optionName + " = true,\n" +
+                "            partition_mode = '" + partitionMode.name() + "'\n" +
                 "        ) "));
         await().atMost(Duration.ofSeconds(ddlWaitTimeSeconds())).until(() -> streamExists(changeStreamName));
     }
 
-    public void createChangeStreamNewRowAndOldValues(String changeStreamName, String... tables)
+    public void createChangeStreamExcludeTtlDeletes(String changeStreamName, PartitionMode partitionMode, String... tables)
             throws ExecutionException, InterruptedException {
-        this.updateDDL(List.of("create change stream " + changeStreamName + " for " +
-                (tables.length == 0 ? "ALL" : String.join(",", tables)) +
-                " OPTIONS (\n" +
-                "            value_capture_type = 'NEW_ROW_AND_OLD_VALUES'\n" +
-                "        ) "));
-        await().atMost(Duration.ofSeconds(60)).until(() -> streamExists(changeStreamName));
-    }
-
-    public void createChangeStreamExcludeDelete(String changeStreamName, String... tables) throws ExecutionException,
-            InterruptedException {
-        this.updateDDL(List.of("create change stream " + changeStreamName + " for " +
-                (tables.length == 0 ? "ALL" : String.join(",", tables)) +
-                " OPTIONS (\n" +
-                "            exclude_delete = true\n" +
-                "        ) "));
-        await().atMost(Duration.ofSeconds(60)).until(() -> streamExists(changeStreamName));
-    }
-
-    public void createChangeStreamExcludeInsert(String changeStreamName, String... tables) throws ExecutionException,
-            InterruptedException {
-        this.updateDDL(List.of("create change stream " + changeStreamName + " for " +
-                (tables.length == 0 ? "ALL" : String.join(",", tables)) +
-                " OPTIONS (\n" +
-                "            exclude_insert = true\n" +
-                "        ) "));
-        await().atMost(Duration.ofSeconds(60)).until(() -> streamExists(changeStreamName));
-    }
-
-    public void createChangeStreamExcludeUpdate(String changeStreamName, String... tables) throws ExecutionException,
-            InterruptedException {
-        this.updateDDL(List.of("create change stream " + changeStreamName + " for " +
-                (tables.length == 0 ? "ALL" : String.join(",", tables)) +
-                " OPTIONS (\n" +
-                "            exclude_update = true\n" +
-                "        ) "));
-        await().atMost(Duration.ofSeconds(60)).until(() -> streamExists(changeStreamName));
-    }
-
-    public void createChangeStreamAllowTxnExclusion(String changeStreamName, String... tables)
-            throws ExecutionException, InterruptedException {
-        this.updateDDL(List.of("create change stream " + changeStreamName + " for " +
-                (tables.length == 0 ? "ALL" : String.join(",", tables)) +
-                " OPTIONS (\n" +
-                "            allow_txn_exclusion = true\n" +
-                "        ) "));
-        await().atMost(Duration.ofSeconds(60)).until(() -> streamExists(changeStreamName));
-    }
-
-    public void createChangeStreamExcludeTtlDeletes(String changeStreamName, String... tables)
-            throws ExecutionException, InterruptedException {
-        this.updateDDL(List.of("create change stream " + changeStreamName + " for " +
-                (tables.length == 0 ? "ALL" : String.join(",", tables)) +
-                " OPTIONS (\n" +
-                "            exclude_ttl_deletes = true\n" +
-                "        ) "));
-        await().atMost(Duration.ofSeconds(60)).until(() -> streamExists(changeStreamName));
+        createChangeStreamWithBooleanOption(changeStreamName, "exclude_ttl_deletes", partitionMode, tables);
     }
 
     public void createChangeStream(String changeStreamName, PartitionMode partitionMode, String... tables)
             throws ExecutionException, InterruptedException {
-        if (partitionMode == PartitionMode.IMMUTABLE_KEY_RANGE) {
-            // The Spanner emulator's DDL parser rejects the partition_mode option
-            // entirely ("Option: partition_mode is unknown"), even when the value
-            // requested is the documented default. Since IMMUTABLE_KEY_RANGE is that
-            // default, falling back to the plain DDL is equivalent and actually works
-            // against the emulator.
-            this.createChangeStream(changeStreamName, tables);
-            return;
-        }
         this.updateDDL(List.of("create change stream " + changeStreamName + " for " +
                 (tables.length == 0 ? "ALL" : String.join(",", tables)) +
                 " OPTIONS ( partition_mode = '" + partitionMode.name() + "' )"));
@@ -338,12 +325,6 @@ public class Connection {
         await().atMost(Duration.ofSeconds(ddlWaitTimeSeconds())).until(() -> placementExists(placementName));
     }
 
-    /**
-     * Checks whether {@code instancePartitionId} already exists on this instance. A read-only
-     * control-plane call - unbilled, unlike actually creating an instance partition - so it's
-     * safe to use as a fail-fast check before {@link #createPlacement} attempts to map a
-     * placement onto one that was never provisioned.
-     */
     private boolean instancePartitionExists(String instancePartitionId) {
         String name = String.format("projects/%s/instances/%s/instancePartitions/%s", projectId, instanceId, instancePartitionId);
         try (com.google.cloud.spanner.admin.instance.v1.InstanceAdminClient adminClient = spanner.createInstanceAdminClient()) {

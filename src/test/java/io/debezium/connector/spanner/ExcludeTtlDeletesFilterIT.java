@@ -15,80 +15,103 @@ import java.util.concurrent.TimeUnit;
 
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.source.SourceRecord;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Disabled;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import io.debezium.config.Configuration;
+import io.debezium.connector.spanner.util.Connection;
+import io.debezium.connector.spanner.util.PartitionMode;
 
 /**
  * The {@code exclude_ttl_deletes} change stream option filters out deletes caused by TTL
  * garbage collection while still delivering normal user-issued deletes - see
  * {@link TtlDeleteEventIT} for the positive (unfiltered) case this is meant to contrast
  * with.
+ *
+ * <p>Parameterized across both partition modes; each test creates and drops its own
+ * partition-mode-suffixed table/change stream per invocation.
+ *
+ * <p>This test is {@link RealSpannerCompatible}: when {@code -Dspanner.test.real=true} is
+ * passed it runs against a real Cloud Spanner instance; otherwise it runs against the local
+ * emulator.
  */
-@Disabled("Blocked on TTL eviction never running in the Spanner emulator within any "
-        + "test-practical window")
+@RealSpannerCompatible
 public class ExcludeTtlDeletesFilterIT extends AbstractSpannerConnectorIT {
 
-    private static final String tableName = "exclude_ttl_deletes_filter_table";
-    private static final String changeStreamName = "excludeTtlDeletesFilterStream";
+    /**
+     * Override the inherited emulator connection/config with a real-Spanner pair when
+     * {@code -Dspanner.test.real=true} is supplied; otherwise keep the parent's emulator pair.
+     */
+    protected static final Connection databaseConnection = Connection.isRealSpanner()
+            ? RealSpannerTestSupport.getConnection(database)
+            : AbstractSpannerConnectorIT.databaseConnection;
+    protected static final Configuration baseConfig = Connection.isRealSpanner()
+            ? createBaseConfigBuilder(database, true).build()
+            : AbstractSpannerConnectorIT.baseConfig;
 
-    @BeforeAll
-    static void setup() throws Exception {
+    private static final String tableNamePrefix = "exclude_ttl_deletes_filter_table";
+    private static final String changeStreamNamePrefix = "excludeTtlDeletesFilterStream";
+
+    @ParameterizedTest
+    @EnumSource(PartitionMode.class)
+    public void shouldFilterOutTtlDeletesButStillDeliverUserIssuedDeletes(PartitionMode partitionMode) throws Exception {
+        String tableName = tableNamePrefix + "_" + partitionMode.name().toLowerCase();
+        String changeStreamName = changeStreamNamePrefix + partitionMode.name();
         databaseConnection.createTable(tableName
                 + "(id INT64, value STRING(100), expire_at TIMESTAMP NOT NULL) PRIMARY KEY (id), "
                 + "ROW DELETION POLICY (OLDER_THAN(expire_at, INTERVAL 1 DAY))");
-        databaseConnection.createChangeStreamExcludeTtlDeletes(changeStreamName, tableName);
-    }
+        databaseConnection.createChangeStreamExcludeTtlDeletes(changeStreamName, partitionMode, tableName);
+        try {
+            Configuration.Builder configBuilder = Configuration.copy(baseConfig)
+                    .with("gcp.spanner.change.stream", changeStreamName)
+                    .with("name", tableName + "_test")
+                    .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()));
+            if (partitionMode == PartitionMode.MUTABLE_KEY_RANGE) {
+                // The connector's sliding window for MUTABLE_KEY_RANGE defaults to 20 minutes;
+                // narrow it to the minimum so records surface within this test's wait budget.
+                configBuilder.with("gcp.spanner.mutable.window.minutes", 1);
+            }
+            final Configuration config = configBuilder.build();
 
-    @AfterAll
-    static void clear() throws InterruptedException {
-        databaseConnection.dropChangeStream(changeStreamName);
-        databaseConnection.dropTable(tableName);
-    }
+            clearKafkaTopics();
+            initializeConnectorTestFramework();
+            start(SpannerConnector.class, config);
+            assertConnectorIsRunning();
 
-    @Test
-    public void shouldFilterOutTtlDeletesButStillDeliverUserIssuedDeletes() throws Exception {
-        final Configuration config = Configuration.copy(baseConfig)
-                .with("gcp.spanner.change.stream", changeStreamName)
-                .with("name", tableName + "_test")
-                .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()))
-                .build();
+            // Row 1 is already past its TTL expiry - its eventual GC-driven delete must be
+            // filtered out entirely by exclude_ttl_deletes.
+            databaseConnection.executeUpdate(
+                    "INSERT INTO " + tableName + "(id, value, expire_at) VALUES ("
+                            + "1, 'ttl-expires-soon', TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 DAY))");
 
-        initializeConnectorTestFramework();
-        start(SpannerConnector.class, config);
-        assertConnectorIsRunning();
+            // Row 2 has a far-future expiry, so it will only ever be removed by the explicit
+            // user-issued DELETE below - the filter must not affect it.
+            databaseConnection.executeUpdate(
+                    "INSERT INTO " + tableName + "(id, value, expire_at) VALUES ("
+                            + "2, 'not-expiring', TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL 30 DAY))");
+            databaseConnection.executeUpdate(
+                    "DELETE FROM " + tableName + " WHERE id = 2");
 
-        // Row 1 is already past its TTL expiry - its eventual GC-driven delete must be
-        // filtered out entirely by exclude_ttl_deletes.
-        databaseConnection.executeUpdate(
-                "INSERT INTO " + tableName + "(id, value, expire_at) VALUES ("
-                        + "1, 'ttl-expires-soon', TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 DAY))");
+            assertTrue(waitForAvailableRecords(waitTimeForRecords(), TimeUnit.SECONDS));
+            SourceRecords sourceRecords = consumeRecordsByTopic(10, false);
+            List<SourceRecord> records = sourceRecords.recordsForTopic(getTopicName(config, tableName));
 
-        // Row 2 has a far-future expiry, so it will only ever be removed by the explicit
-        // user-issued DELETE below - the filter must not affect it.
-        databaseConnection.executeUpdate(
-                "INSERT INTO " + tableName + "(id, value, expire_at) VALUES ("
-                        + "2, 'not-expiring', TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL 30 DAY))");
-        databaseConnection.executeUpdate(
-                "DELETE FROM " + tableName + " WHERE id = 2");
+            // 2 inserts + 1 user-issued delete + 1 tombstone - no TTL-triggered delete or
+            // tombstone for row 1, no matter how long we wait for it.
+            assertThat(records).hasSize(4);
 
-        assertTrue(waitForAvailableRecords(waitTimeForRecords(), TimeUnit.SECONDS));
-        SourceRecords sourceRecords = consumeRecordsByTopic(10, false);
-        List<SourceRecord> records = sourceRecords.recordsForTopic(getTopicName(config, tableName));
+            Struct userDelete = (Struct) records.get(2).value();
+            assertThat(userDelete.get("op")).isEqualTo("d");
+            assertThat(userDelete.getStruct("before").getInt64("id")).isEqualTo(2L);
+            assertThat(userDelete.getStruct("source").getBoolean("system_transaction")).isFalse();
 
-        // 2 inserts + 1 user-issued delete + 1 tombstone - no TTL-triggered delete or
-        // tombstone for row 1, no matter how long we wait for it.
-        assertThat(records).hasSize(4);
-
-        Struct userDelete = (Struct) records.get(2).value();
-        assertThat(userDelete.get("op")).isEqualTo("d");
-        assertThat(userDelete.getStruct("before").getInt64("id")).isEqualTo(2L);
-        assertThat(userDelete.getStruct("source").getBoolean("system_transaction")).isFalse();
-
-        stopConnector();
-        assertConnectorNotRunning();
+            stopConnector();
+            assertConnectorNotRunning();
+        }
+        finally {
+            stopConnector();
+            databaseConnection.dropChangeStream(changeStreamName);
+            databaseConnection.dropTable(tableName);
+        }
     }
 }

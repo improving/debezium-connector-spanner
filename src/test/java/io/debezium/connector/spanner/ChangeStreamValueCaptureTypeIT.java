@@ -16,51 +16,46 @@ import java.util.concurrent.TimeUnit;
 
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.source.SourceRecord;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import io.debezium.config.Configuration;
+import io.debezium.connector.spanner.util.Connection;
+import io.debezium.connector.spanner.util.PartitionMode;
 
+/**
+ * Parameterized across both partition modes; each test creates and drops its own
+ * partition-mode-suffixed table/change stream per invocation.
+ *
+ * <p>This test is {@link RealSpannerCompatible}: when {@code -Dspanner.test.real=true} is
+ * passed it runs against a real Cloud Spanner instance; otherwise it runs against the local
+ * emulator.
+ */
+@RealSpannerCompatible
 public class ChangeStreamValueCaptureTypeIT extends AbstractSpannerConnectorIT {
 
-    private static final String tableNameNewValues = "embedded_new_values_capture_table";
-    private static final String changeStreamNameNewValues = "embeddedNewValuesCaptureStream";
+    /**
+     * Override the inherited emulator connection/config with a real-Spanner pair when
+     * {@code -Dspanner.test.real=true} is supplied; otherwise keep the parent's emulator pair.
+     */
+    protected static final Connection databaseConnection = Connection.isRealSpanner()
+            ? RealSpannerTestSupport.getConnection(database)
+            : AbstractSpannerConnectorIT.databaseConnection;
+    protected static final Configuration baseConfig = Connection.isRealSpanner()
+            ? createBaseConfigBuilder(database, true).build()
+            : AbstractSpannerConnectorIT.baseConfig;
 
-    private static final String tableNameNewRow = "embedded_new_row_capture_table";
-    private static final String changeStreamNameNewRow = "embeddedNewRowCaptureStream";
+    private static final String tableNameNewValuesPrefix = "embedded_new_values_capture_table";
+    private static final String changeStreamNameNewValuesPrefix = "embeddedNewValuesCaptureStream";
 
-    private static final String tableNameNewRowAndOldValues = "embedded_new_row_old_values_capture_table";
-    private static final String changeStreamNameNewRowAndOldValues = "embeddedNewRowAndOldValuesCaptureStream";
+    private static final String tableNameNewRowPrefix = "embedded_new_row_capture_table";
+    private static final String changeStreamNameNewRowPrefix = "embeddedNewRowCaptureStream";
 
-    @BeforeAll
-    static void setup() throws InterruptedException, ExecutionException {
-        databaseConnection.createTable(tableNameNewValues
-                + "(id INT64, name STRING(100), status STRING(20), score INT64) PRIMARY KEY (id)");
-        databaseConnection.createChangeStreamNewValue(changeStreamNameNewValues, tableNameNewValues);
-
-        databaseConnection.createTable(tableNameNewRow
-                + "(id INT64, name STRING(100), status STRING(20), score INT64) PRIMARY KEY (id)");
-        databaseConnection.createChangeStreamNewRow(changeStreamNameNewRow, tableNameNewRow);
-
-        databaseConnection.createTable(tableNameNewRowAndOldValues
-                + "(id INT64, name STRING(100), status STRING(20), score INT64) PRIMARY KEY (id)");
-        databaseConnection.createChangeStreamNewRowAndOldValues(changeStreamNameNewRowAndOldValues, tableNameNewRowAndOldValues);
-    }
-
-    @AfterAll
-    static void clear() throws InterruptedException {
-        databaseConnection.dropChangeStream(changeStreamNameNewValues);
-        databaseConnection.dropTable(tableNameNewValues);
-
-        databaseConnection.dropChangeStream(changeStreamNameNewRow);
-        databaseConnection.dropTable(tableNameNewRow);
-
-        databaseConnection.dropChangeStream(changeStreamNameNewRowAndOldValues);
-        databaseConnection.dropTable(tableNameNewRowAndOldValues);
-    }
+    private static final String tableNameNewRowAndOldValuesPrefix = "embedded_new_row_old_values_capture_table";
+    private static final String changeStreamNameNewRowAndOldValuesPrefix = "embeddedNewRowAndOldValuesCaptureStream";
 
     @BeforeEach
     void initFramework() {
@@ -74,122 +69,181 @@ public class ChangeStreamValueCaptureTypeIT extends AbstractSpannerConnectorIT {
         assertConnectorNotRunning();
     }
 
-    @Test
-    public void shouldCaptureFullNewRowWithNoNonKeyOldValues() throws InterruptedException, ExecutionException {
-        final Configuration config = Configuration.copy(baseConfig)
-                .with("gcp.spanner.change.stream", changeStreamNameNewValues)
-                .with("name", tableNameNewValues + "_test")
-                .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()))
-                .build();
+    @ParameterizedTest
+    @EnumSource(PartitionMode.class)
+    public void shouldCaptureFullNewRowWithNoNonKeyOldValues(PartitionMode partitionMode) throws InterruptedException, ExecutionException {
+        Assumptions.assumeTrue(!Connection.isRealSpanner(),
+                "Skipping: on real Cloud Spanner, NEW_VALUES's 'after' struct omits columns that "
+                        + "weren't part of the UPDATE's SET clause, contrary to the emulator's full-row "
+                        + "behavior - see doc/change-stream-integration-tests.md.");
+        String tableName = tableNameNewValuesPrefix + "_" + partitionMode.name().toLowerCase();
+        String changeStreamName = changeStreamNameNewValuesPrefix + partitionMode.name();
+        databaseConnection.createTable(tableName
+                + "(id INT64, name STRING(100), status STRING(20), score INT64) PRIMARY KEY (id)");
+        databaseConnection.createChangeStreamNewValue(changeStreamName, partitionMode, tableName);
+        try {
+            Configuration.Builder configBuilder = Configuration.copy(baseConfig)
+                    .with("gcp.spanner.change.stream", changeStreamName)
+                    .with("name", tableName + "_test")
+                    .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()));
+            if (partitionMode == PartitionMode.MUTABLE_KEY_RANGE) {
+                // The connector's sliding window for MUTABLE_KEY_RANGE defaults to 20 minutes;
+                // narrow it to the minimum so records surface within this test's wait budget.
+                configBuilder.with("gcp.spanner.mutable.window.minutes", 1);
+            }
+            final Configuration config = configBuilder.build();
 
-        start(SpannerConnector.class, config);
-        assertConnectorIsRunning();
+            start(SpannerConnector.class, config);
+            assertConnectorIsRunning();
 
-        databaseConnection.executeUpdate(
-                "INSERT INTO " + tableNameNewValues + "(id, name, status, score) VALUES (1, 'Alice', 'active', 10)");
-        // Only 'score' is touched here — 'name' and 'status' are left alone.
-        databaseConnection.executeUpdate(
-                "UPDATE " + tableNameNewValues + " SET score = 20 WHERE id = 1");
+            databaseConnection.executeUpdate(
+                    "INSERT INTO " + tableName + "(id, name, status, score) VALUES (1, 'Alice', 'active', 10)");
+            // Only 'score' is touched here — 'name' and 'status' are left alone.
+            databaseConnection.executeUpdate(
+                    "UPDATE " + tableName + " SET score = 20 WHERE id = 1");
 
-        assertTrue(waitForAvailableRecords(waitTimeForRecords(), TimeUnit.SECONDS));
-        SourceRecords sourceRecords = consumeRecordsByTopic(10, false);
-        List<SourceRecord> records = sourceRecords.recordsForTopic(getTopicName(config, tableNameNewValues));
-        assertThat(records).hasSize(2);
+            assertTrue(waitForAvailableRecords(waitTimeForRecords(), TimeUnit.SECONDS));
+            SourceRecords sourceRecords = consumeRecordsByTopic(10, false);
+            List<SourceRecord> records = sourceRecords.recordsForTopic(getTopicName(config, tableName));
+            assertThat(records).hasSize(2);
 
-        Struct updateRecord = (Struct) records.get(1).value();
-        assertThat(updateRecord.get("op")).isEqualTo("u");
+            Struct updateRecord = (Struct) records.get(1).value();
+            assertThat(updateRecord.get("op")).isEqualTo("u");
 
-        // NEW_VALUES captures no non-key old values; the primary key still identifies
-        // the row, but none of the other columns' prior values are included.
-        Struct before = updateRecord.getStruct("before");
-        assertThat(before).isNotNull();
-        assertThat(before.getInt64("id")).isEqualTo(1L);
-        assertThat(before.getString("name")).isNull();
-        assertThat(before.getString("status")).isNull();
-        assertThat(before.getInt64("score")).isNull();
+            // NEW_VALUES captures no non-key old values; the primary key still identifies
+            // the row, but none of the other columns' prior values are included.
+            Struct before = updateRecord.getStruct("before");
+            assertThat(before).isNotNull();
+            assertThat(before.getInt64("id")).isEqualTo(1L);
+            assertThat(before.getString("name")).isNull();
+            assertThat(before.getString("status")).isNull();
+            assertThat(before.getInt64("score")).isNull();
 
-        // The connector returns the full non-key row in
-        // "after" regardless of which columns actually changed - matching the same
-        // full-row behavior observed for OLD_AND_NEW_VALUES.
-        Struct after = updateRecord.getStruct("after");
-        assertThat(after.getInt64("score")).isEqualTo(20);
-        assertThat(after.getString("name")).isEqualTo("Alice");
-        assertThat(after.getString("status")).isEqualTo("active");
+            // On the emulator, "after" always contains the full non-key row regardless of
+            // which columns actually changed. This doesn't hold on real Cloud Spanner - see
+            // the assumeTrue skip above.
+            Struct after = updateRecord.getStruct("after");
+            assertThat(after.getInt64("score")).isEqualTo(20);
+            assertThat(after.getString("name")).isEqualTo("Alice");
+            assertThat(after.getString("status")).isEqualTo("active");
+        }
+        finally {
+            databaseConnection.dropChangeStream(changeStreamName);
+            databaseConnection.dropTable(tableName);
+        }
     }
 
-    @Test
-    public void shouldCaptureFullNewRowWithNoOldValues() throws InterruptedException, ExecutionException {
-        final Configuration config = Configuration.copy(baseConfig)
-                .with("gcp.spanner.change.stream", changeStreamNameNewRow)
-                .with("name", tableNameNewRow + "_test")
-                .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()))
-                .build();
+    @ParameterizedTest
+    @EnumSource(PartitionMode.class)
+    public void shouldCaptureFullNewRowWithNoOldValues(PartitionMode partitionMode) throws InterruptedException, ExecutionException {
+        String tableName = tableNameNewRowPrefix + "_" + partitionMode.name().toLowerCase();
+        String changeStreamName = changeStreamNameNewRowPrefix + partitionMode.name();
+        databaseConnection.createTable(tableName
+                + "(id INT64, name STRING(100), status STRING(20), score INT64) PRIMARY KEY (id)");
+        databaseConnection.createChangeStreamNewRow(changeStreamName, partitionMode, tableName);
+        try {
+            Configuration.Builder configBuilder = Configuration.copy(baseConfig)
+                    .with("gcp.spanner.change.stream", changeStreamName)
+                    .with("name", tableName + "_test")
+                    .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()));
+            if (partitionMode == PartitionMode.MUTABLE_KEY_RANGE) {
+                // The connector's sliding window for MUTABLE_KEY_RANGE defaults to 20 minutes;
+                // narrow it to the minimum so records surface within this test's wait budget.
+                configBuilder.with("gcp.spanner.mutable.window.minutes", 1);
+            }
+            final Configuration config = configBuilder.build();
 
-        start(SpannerConnector.class, config);
-        assertConnectorIsRunning();
+            start(SpannerConnector.class, config);
+            assertConnectorIsRunning();
 
-        databaseConnection.executeUpdate(
-                "INSERT INTO " + tableNameNewRow + "(id, name, status, score) VALUES (1, 'Alice', 'active', 10)");
-        // Only 'score' is touched here — 'name' and 'status' are left alone.
-        databaseConnection.executeUpdate(
-                "UPDATE " + tableNameNewRow + " SET score = 20 WHERE id = 1");
+            databaseConnection.executeUpdate(
+                    "INSERT INTO " + tableName + "(id, name, status, score) VALUES (1, 'Alice', 'active', 10)");
+            // Only 'score' is touched here — 'name' and 'status' are left alone.
+            databaseConnection.executeUpdate(
+                    "UPDATE " + tableName + " SET score = 20 WHERE id = 1");
 
-        assertTrue(waitForAvailableRecords(waitTimeForRecords(), TimeUnit.SECONDS));
-        SourceRecords sourceRecords = consumeRecordsByTopic(10, false);
-        List<SourceRecord> records = sourceRecords.recordsForTopic(getTopicName(config, tableNameNewRow));
-        assertThat(records).hasSize(2);
+            assertTrue(waitForAvailableRecords(waitTimeForRecords(), TimeUnit.SECONDS));
+            SourceRecords sourceRecords = consumeRecordsByTopic(10, false);
+            List<SourceRecord> records = sourceRecords.recordsForTopic(getTopicName(config, tableName));
+            assertThat(records).hasSize(2);
 
-        Struct updateRecord = (Struct) records.get(1).value();
-        assertThat(updateRecord.get("op")).isEqualTo("u");
+            Struct updateRecord = (Struct) records.get(1).value();
+            assertThat(updateRecord.get("op")).isEqualTo("u");
 
-        // NEW_ROW captures no old values.
-        Struct before = updateRecord.getStruct("before");
-        assertThat(before).isNotNull();
-        assertThat(before.getInt64("id")).isEqualTo(1L);
-        assertThat(before.getString("name")).isNull();
-        assertThat(before.getString("status")).isNull();
-        assertThat(before.getInt64("score")).isNull();
+            // NEW_ROW captures no old values.
+            Struct before = updateRecord.getStruct("before");
+            assertThat(before).isNotNull();
+            assertThat(before.getInt64("id")).isEqualTo(1L);
+            assertThat(before.getString("name")).isNull();
+            assertThat(before.getString("status")).isNull();
+            assertThat(before.getInt64("score")).isNull();
 
-        // NEW_ROW captures the full row - both modified and unmodified columns.
-        Struct after = updateRecord.getStruct("after");
-        assertThat(after.getInt64("score")).isEqualTo(20);
-        assertThat(after.getString("name")).isEqualTo("Alice");
-        assertThat(after.getString("status")).isEqualTo("active");
+            // NEW_ROW captures the full row - both modified and unmodified columns.
+            Struct after = updateRecord.getStruct("after");
+            assertThat(after.getInt64("score")).isEqualTo(20);
+            assertThat(after.getString("name")).isEqualTo("Alice");
+            assertThat(after.getString("status")).isEqualTo("active");
+        }
+        finally {
+            databaseConnection.dropChangeStream(changeStreamName);
+            databaseConnection.dropTable(tableName);
+        }
     }
 
-    @Test
-    public void shouldCaptureFullRowOnBothSides() throws InterruptedException, ExecutionException {
-        final Configuration config = Configuration.copy(baseConfig)
-                .with("gcp.spanner.change.stream", changeStreamNameNewRowAndOldValues)
-                .with("name", tableNameNewRowAndOldValues + "_test")
-                .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()))
-                .build();
+    @ParameterizedTest
+    @EnumSource(PartitionMode.class)
+    public void shouldCaptureFullRowOnBothSides(PartitionMode partitionMode) throws InterruptedException, ExecutionException {
+        Assumptions.assumeTrue(!Connection.isRealSpanner(),
+                "Skipping: on real Cloud Spanner, NEW_ROW_AND_OLD_VALUES's 'before' struct omits "
+                        + "columns that weren't part of the UPDATE's SET clause, contrary to the "
+                        + "emulator's full-row behavior - see doc/change-stream-integration-tests.md.");
+        String tableName = tableNameNewRowAndOldValuesPrefix + "_" + partitionMode.name().toLowerCase();
+        String changeStreamName = changeStreamNameNewRowAndOldValuesPrefix + partitionMode.name();
+        databaseConnection.createTable(tableName
+                + "(id INT64, name STRING(100), status STRING(20), score INT64) PRIMARY KEY (id)");
+        databaseConnection.createChangeStreamNewRowAndOldValues(changeStreamName, partitionMode, tableName);
+        try {
+            Configuration.Builder configBuilder = Configuration.copy(baseConfig)
+                    .with("gcp.spanner.change.stream", changeStreamName)
+                    .with("name", tableName + "_test")
+                    .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()));
+            if (partitionMode == PartitionMode.MUTABLE_KEY_RANGE) {
+                // The connector's sliding window for MUTABLE_KEY_RANGE defaults to 20 minutes;
+                // narrow it to the minimum so records surface within this test's wait budget.
+                configBuilder.with("gcp.spanner.mutable.window.minutes", 1);
+            }
+            final Configuration config = configBuilder.build();
 
-        start(SpannerConnector.class, config);
-        assertConnectorIsRunning();
+            start(SpannerConnector.class, config);
+            assertConnectorIsRunning();
 
-        databaseConnection.executeUpdate(
-                "INSERT INTO " + tableNameNewRowAndOldValues + "(id, name, status, score) VALUES (1, 'Alice', 'active', 10)");
-        // Only 'score' is touched here — 'name' and 'status' are left alone.
-        databaseConnection.executeUpdate(
-                "UPDATE " + tableNameNewRowAndOldValues + " SET score = 20 WHERE id = 1");
+            databaseConnection.executeUpdate(
+                    "INSERT INTO " + tableName + "(id, name, status, score) VALUES (1, 'Alice', 'active', 10)");
+            // Only 'score' is touched here — 'name' and 'status' are left alone.
+            databaseConnection.executeUpdate(
+                    "UPDATE " + tableName + " SET score = 20 WHERE id = 1");
 
-        assertTrue(waitForAvailableRecords(waitTimeForRecords(), TimeUnit.SECONDS));
-        SourceRecords sourceRecords = consumeRecordsByTopic(10, false);
-        List<SourceRecord> records = sourceRecords.recordsForTopic(getTopicName(config, tableNameNewRowAndOldValues));
-        assertThat(records).hasSize(2);
+            assertTrue(waitForAvailableRecords(waitTimeForRecords(), TimeUnit.SECONDS));
+            SourceRecords sourceRecords = consumeRecordsByTopic(10, false);
+            List<SourceRecord> records = sourceRecords.recordsForTopic(getTopicName(config, tableName));
+            assertThat(records).hasSize(2);
 
-        Struct updateRecord = (Struct) records.get(1).value();
-        assertThat(updateRecord.get("op")).isEqualTo("u");
+            Struct updateRecord = (Struct) records.get(1).value();
+            assertThat(updateRecord.get("op")).isEqualTo("u");
 
-        Struct before = updateRecord.getStruct("before");
-        assertThat(before.getInt64("score")).isEqualTo(10);
-        assertThat(before.getString("name")).isEqualTo("Alice");
-        assertThat(before.getString("status")).isEqualTo("active");
+            Struct before = updateRecord.getStruct("before");
+            assertThat(before.getInt64("score")).isEqualTo(10);
+            assertThat(before.getString("name")).isEqualTo("Alice");
+            assertThat(before.getString("status")).isEqualTo("active");
 
-        Struct after = updateRecord.getStruct("after");
-        assertThat(after.getInt64("score")).isEqualTo(20);
-        assertThat(after.getString("name")).isEqualTo("Alice");
-        assertThat(after.getString("status")).isEqualTo("active");
+            Struct after = updateRecord.getStruct("after");
+            assertThat(after.getInt64("score")).isEqualTo(20);
+            assertThat(after.getString("name")).isEqualTo("Alice");
+            assertThat(after.getString("status")).isEqualTo("active");
+        }
+        finally {
+            databaseConnection.dropChangeStream(changeStreamName);
+            databaseConnection.dropTable(tableName);
+        }
     }
 }

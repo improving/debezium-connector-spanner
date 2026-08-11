@@ -11,7 +11,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.kafka.connect.data.Field;
@@ -19,7 +18,6 @@ import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.source.SourceRecord;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
@@ -30,7 +28,27 @@ import io.debezium.config.Configuration;
 import io.debezium.connector.spanner.util.Connection;
 import io.debezium.connector.spanner.util.PartitionMode;
 
+/**
+ * Parameterized across all partition modes. Verifies the actual content of change-stream
+ * records matches documented behavior for various row/column scenarios.
+ *
+ * <p>This test is {@link RealSpannerCompatible}: when {@code -Dspanner.test.real=true} is
+ * passed it runs against a real Cloud Spanner instance; otherwise it runs against the local
+ * emulator.
+ */
+@RealSpannerCompatible
 public class ChangeStreamCorrectContentIT extends AbstractSpannerConnectorIT {
+
+    /**
+     * Override the inherited emulator connection/config with a real-Spanner pair when
+     * {@code -Dspanner.test.real=true} is supplied; otherwise keep the parent's emulator pair.
+     */
+    protected static final Connection databaseConnection = Connection.isRealSpanner()
+            ? RealSpannerTestSupport.getConnection(database)
+            : AbstractSpannerConnectorIT.databaseConnection;
+    protected static final Configuration baseConfig = Connection.isRealSpanner()
+            ? createBaseConfigBuilder(database, true).build()
+            : AbstractSpannerConnectorIT.baseConfig;
 
     private static final String compositePkTableName = "embedded_composite_pk_table";
     private static final String compositePkChangeStreamName = "embeddedCompositePkChangeStream";
@@ -64,11 +82,16 @@ public class ChangeStreamCorrectContentIT extends AbstractSpannerConnectorIT {
                 + "(tenant_id INT64, id INT64, name STRING(100)) PRIMARY KEY (tenant_id, id)");
         databaseConnection.createChangeStream(changeStream, partitionMode, table);
         try {
-            final Configuration config = Configuration.copy(baseConfig)
+            Configuration.Builder configBuilder = Configuration.copy(baseConfig)
                     .with("gcp.spanner.change.stream", changeStream)
                     .with("name", table + "_test")
-                    .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()))
-                    .build();
+                    .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()));
+            if (partitionMode == PartitionMode.MUTABLE_KEY_RANGE) {
+                // The connector's sliding window for MUTABLE_KEY_RANGE defaults to 20 minutes;
+                // narrow it to the minimum so records surface within this test's wait budget.
+                configBuilder.with("gcp.spanner.mutable.window.minutes", 1);
+            }
+            final Configuration config = configBuilder.build();
 
             initializeConnectorTestFramework();
             start(SpannerConnector.class, config);
@@ -139,11 +162,16 @@ public class ChangeStreamCorrectContentIT extends AbstractSpannerConnectorIT {
                 + "(id INT64, name STRING(100), status STRING(20), score INT64) PRIMARY KEY (id)");
         databaseConnection.createChangeStream(changeStream, partitionMode, table);
         try {
-            final Configuration config = Configuration.copy(baseConfig)
+            Configuration.Builder configBuilder = Configuration.copy(baseConfig)
                     .with("gcp.spanner.change.stream", changeStream)
                     .with("name", table + "_test")
-                    .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()))
-                    .build();
+                    .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()));
+            if (partitionMode == PartitionMode.MUTABLE_KEY_RANGE) {
+                // The connector's sliding window for MUTABLE_KEY_RANGE defaults to 20 minutes;
+                // narrow it to the minimum so records surface within this test's wait budget.
+                configBuilder.with("gcp.spanner.mutable.window.minutes", 1);
+            }
+            final Configuration config = configBuilder.build();
 
             initializeConnectorTestFramework();
             start(SpannerConnector.class, config);
@@ -205,11 +233,16 @@ public class ChangeStreamCorrectContentIT extends AbstractSpannerConnectorIT {
                 + "(id INT64, nickname STRING(100)) PRIMARY KEY (id)");
         databaseConnection.createChangeStream(changeStream, partitionMode, table);
         try {
-            final Configuration config = Configuration.copy(baseConfig)
+            Configuration.Builder configBuilder = Configuration.copy(baseConfig)
                     .with("gcp.spanner.change.stream", changeStream)
                     .with("name", table + "_test")
-                    .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()))
-                    .build();
+                    .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()));
+            if (partitionMode == PartitionMode.MUTABLE_KEY_RANGE) {
+                // The connector's sliding window for MUTABLE_KEY_RANGE defaults to 20 minutes;
+                // narrow it to the minimum so records surface within this test's wait budget.
+                configBuilder.with("gcp.spanner.mutable.window.minutes", 1);
+            }
+            final Configuration config = configBuilder.build();
 
             initializeConnectorTestFramework();
             start(SpannerConnector.class, config);
@@ -261,17 +294,26 @@ public class ChangeStreamCorrectContentIT extends AbstractSpannerConnectorIT {
     @ParameterizedTest
     @EnumSource(PartitionMode.class)
     public void shouldCarryUnchangedColumnsThroughOnPartialUpdate(PartitionMode partitionMode) throws Exception {
+        Assumptions.assumeTrue(!Connection.isRealSpanner(),
+                "Skipping: on real Spanner, an UPDATE's payload omits columns that weren't part of its SET "
+                        + "clause, so an unchanged column comes back null instead of its real value. See the "
+                        + "class Javadoc / doc/change-stream-integration-tests.md for the root cause.");
         String table = partialUpdateTableName + "_" + partitionMode.name().toLowerCase();
         String changeStream = partialUpdateChangeStreamName + partitionMode.name();
         databaseConnection.createTable(table
                 + "(id INT64, name STRING(100), status STRING(20), score INT64) PRIMARY KEY (id)");
         databaseConnection.createChangeStream(changeStream, partitionMode, table);
         try {
-            final Configuration config = Configuration.copy(baseConfig)
+            Configuration.Builder configBuilder = Configuration.copy(baseConfig)
                     .with("gcp.spanner.change.stream", changeStream)
                     .with("name", table + "_test")
-                    .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()))
-                    .build();
+                    .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()));
+            if (partitionMode == PartitionMode.MUTABLE_KEY_RANGE) {
+                // The connector's sliding window for MUTABLE_KEY_RANGE defaults to 20 minutes;
+                // narrow it to the minimum so records surface within this test's wait budget.
+                configBuilder.with("gcp.spanner.mutable.window.minutes", 1);
+            }
+            final Configuration config = configBuilder.build();
 
             initializeConnectorTestFramework();
             start(SpannerConnector.class, config);
@@ -322,11 +364,16 @@ public class ChangeStreamCorrectContentIT extends AbstractSpannerConnectorIT {
         databaseConnection.createTable(table + "(id INT64, name STRING(100)) PRIMARY KEY (id)");
         databaseConnection.createChangeStream(changeStream, partitionMode, table);
         try {
-            final Configuration config = Configuration.copy(baseConfig)
+            Configuration.Builder configBuilder = Configuration.copy(baseConfig)
                     .with("gcp.spanner.change.stream", changeStream)
                     .with("name", table + "_test")
-                    .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()))
-                    .build();
+                    .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()));
+            if (partitionMode == PartitionMode.MUTABLE_KEY_RANGE) {
+                // The connector's sliding window for MUTABLE_KEY_RANGE defaults to 20 minutes;
+                // narrow it to the minimum so records surface within this test's wait budget.
+                configBuilder.with("gcp.spanner.mutable.window.minutes", 1);
+            }
+            final Configuration config = configBuilder.build();
 
             initializeConnectorTestFramework();
             start(SpannerConnector.class, config);
@@ -387,11 +434,16 @@ public class ChangeStreamCorrectContentIT extends AbstractSpannerConnectorIT {
         databaseConnection.createTable(table + "(id INT64, value STRING(100)) PRIMARY KEY (id)");
         databaseConnection.createChangeStream(changeStream, partitionMode, table);
         try {
-            final Configuration config = Configuration.copy(baseConfig)
+            Configuration.Builder configBuilder = Configuration.copy(baseConfig)
                     .with("gcp.spanner.change.stream", changeStream)
                     .with("name", table + "_test")
-                    .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()))
-                    .build();
+                    .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()));
+            if (partitionMode == PartitionMode.MUTABLE_KEY_RANGE) {
+                // The connector's sliding window for MUTABLE_KEY_RANGE defaults to 20 minutes;
+                // narrow it to the minimum so records surface within this test's wait budget.
+                configBuilder.with("gcp.spanner.mutable.window.minutes", 1);
+            }
+            final Configuration config = configBuilder.build();
 
             initializeConnectorTestFramework();
             start(SpannerConnector.class, config);
@@ -422,22 +474,28 @@ public class ChangeStreamCorrectContentIT extends AbstractSpannerConnectorIT {
     // The local Docker emulator does not propagate transaction tags through its change stream:
     // confirmed by inspecting the raw DataChangeEvent parsed straight from the emulator's
     // stream, which already shows an empty transactionTag before any connector processing
-    // happens. Confirmed passing against a real Cloud Spanner instance (-Preal-spanner).
-    @Test
-    public void shouldSurfaceExplicitTransactionTag() throws InterruptedException, ExecutionException {
+    // happens. Runs against real Spanner (-Dspanner.test.real=true).
+    @ParameterizedTest
+    @EnumSource(PartitionMode.class)
+    public void shouldSurfaceExplicitTransactionTag(PartitionMode partitionMode) throws Exception {
         Assumptions.assumeTrue(Connection.isRealSpanner(),
                 "Transaction tags are not propagated by the local Docker emulator. Run against real Spanner "
                         + "instead (-Dspanner.test.real=true)");
-        String table = txnMetadataTableName + "_tag";
-        String changeStream = txnMetadataChangeStreamName + "Tag";
+        String table = txnMetadataTableName + "_tag_" + partitionMode.name().toLowerCase();
+        String changeStream = txnMetadataChangeStreamName + "Tag" + partitionMode.name();
         databaseConnection.createTable(table + "(id INT64, value STRING(100)) PRIMARY KEY (id)");
-        databaseConnection.createChangeStream(changeStream, table);
+        databaseConnection.createChangeStream(changeStream, partitionMode, table);
         try {
-            final Configuration config = Configuration.copy(baseConfig)
+            Configuration.Builder configBuilder = Configuration.copy(baseConfig)
                     .with("gcp.spanner.change.stream", changeStream)
                     .with("name", table + "_test")
-                    .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()))
-                    .build();
+                    .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()));
+            if (partitionMode == PartitionMode.MUTABLE_KEY_RANGE) {
+                // The connector's sliding window for MUTABLE_KEY_RANGE defaults to 20 minutes;
+                // narrow it to the minimum so records surface within this test's wait budget.
+                configBuilder.with("gcp.spanner.mutable.window.minutes", 1);
+            }
+            final Configuration config = configBuilder.build();
 
             initializeConnectorTestFramework();
             start(SpannerConnector.class, config);
