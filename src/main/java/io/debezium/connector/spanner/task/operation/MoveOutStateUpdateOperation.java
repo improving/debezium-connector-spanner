@@ -57,11 +57,20 @@ public class MoveOutStateUpdateOperation implements Operation {
         List<PartitionState> updatedPartitions = currentTaskState.getPartitions().stream()
                 .map(partitionState -> {
                     if (partitionState.getToken().equals(token)) {
+                        List<String> mergedDestinations = new ArrayList<>();
                         List<MoveOutState> mergedMoveOutStates = partitionState.getMoveOutStates().stream()
                                 .map(existingMoveOutState -> replaceOlderDestinations(existingMoveOutState, newMoveOutState))
                                 .filter(existingMoveOutState -> !existingMoveOutState.getDestPartitionTokens().isEmpty())
+                                .filter(existingMoveOutState -> {
+                                    if (existingMoveOutState.getTimestamp().equals(newMoveOutState.getTimestamp())) {
+                                        mergedDestinations.addAll(existingMoveOutState.getDestPartitionTokens());
+                                        return false;
+                                    }
+                                    return true;
+                                })
                                 .collect(Collectors.toCollection(ArrayList::new));
-                        mergedMoveOutStates.add(newMoveOutState);
+                        mergedDestinations.addAll(newMoveOutState.getDestPartitionTokens());
+                        mergedMoveOutStates.add(new MoveOutState(newMoveOutState.getTimestamp(), mergedDestinations));
                         return partitionState.toBuilder()
                                 .moveOutStates(mergedMoveOutStates)
                                 .build();
