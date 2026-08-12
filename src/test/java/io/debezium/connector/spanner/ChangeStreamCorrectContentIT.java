@@ -471,10 +471,8 @@ public class ChangeStreamCorrectContentIT extends AbstractSpannerConnectorIT {
         }
     }
 
-    // The local Docker emulator does not propagate transaction tags through its change stream:
-    // confirmed by inspecting the raw DataChangeEvent parsed straight from the emulator's
-    // stream, which already shows an empty transactionTag before any connector processing
-    // happens. Runs against real Spanner (-Dspanner.test.real=true).
+    // The local Docker emulator does not propagate transaction tags through its change stream.
+    // Runs against real Spanner (-Dspanner.test.real=true).
     @ParameterizedTest
     @EnumSource(PartitionMode.class)
     public void shouldSurfaceExplicitTransactionTag(PartitionMode partitionMode) throws Exception {

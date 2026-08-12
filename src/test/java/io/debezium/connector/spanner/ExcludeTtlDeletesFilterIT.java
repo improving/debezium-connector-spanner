@@ -24,9 +24,7 @@ import io.debezium.connector.spanner.util.PartitionMode;
 
 /**
  * The {@code exclude_ttl_deletes} change stream option filters out deletes caused by TTL
- * garbage collection while still delivering normal user-issued deletes - see
- * {@link TtlDeleteEventIT} for the positive (unfiltered) case this is meant to contrast
- * with.
+ * garbage collection while still delivering normal user-issued deletes.
  *
  * <p>Parameterized across both partition modes; each test creates and drops its own
  * partition-mode-suffixed table/change stream per invocation.

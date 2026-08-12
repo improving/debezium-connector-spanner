@@ -148,7 +148,7 @@ public class Connection {
             InterruptedException {
         this.updateDDL(List.of("create change stream " + changeStreamName + " for " +
                 (tables.length == 0 ? "ALL" : String.join(",", tables))));
-        await().atMost(Duration.ofSeconds(ddlWaitTimeSeconds())).until(() -> streamExists(changeStreamName));
+        await().atMost(Duration.ofSeconds(ddlWaitTimeSeconds())).until(() -> isStreamExist(changeStreamName));
     }
 
     public void createMutableKeyRangeChangeStream(String changeStreamName, String... tables) throws ExecutionException,
@@ -156,27 +156,25 @@ public class Connection {
         this.updateDDL(List.of("create change stream " + changeStreamName + " for " +
                 (tables.length == 0 ? "ALL" : String.join(",", tables)) +
                 " OPTIONS (partition_mode = 'MUTABLE_KEY_RANGE')"));
-        await().atMost(Duration.ofSeconds(ddlWaitTimeSeconds())).until(() -> streamExists(changeStreamName));
+        await().atMost(Duration.ofSeconds(ddlWaitTimeSeconds())).until(() -> isStreamExist(changeStreamName));
     }
 
     private static final Duration DEFAULT_SPLIT_EXPIRY = Duration.ofMinutes(30);
 
-    /**
-     * Forces Spanner to split the key range of {@code tableName} at the given key value(s),
-     * triggering a mutable key range move (MoveOut/MoveIn) for change streams tracking the table.
-     * Confirmed working against both Spanner Omni and real Cloud Spanner via the
-     * {@code AddSplitPoints} admin API. Split points expire after {@link #DEFAULT_SPLIT_EXPIRY} -
-     * use {@link #forceSplit(String, Duration, String...)} to override.
-     */
     public void forceSplit(String tableName, String... keyParts) {
         forceSplit(tableName, DEFAULT_SPLIT_EXPIRY, keyParts);
     }
 
     /**
-     * Same as {@link #forceSplit(String, String...)}, but with an explicit split-point expiry.
-     * Split points count against a small, instance-wide quota (5 concurrent on the shared
-     * real-Spanner test instance) until they expire, so keep this as short as safely possible for
-     * whatever the calling test actually needs rather than reaching for a long, "safe" duration.
+     * Forces Spanner to split the key range of {@code tableName} at the given key value(s),
+     * triggering a mutable key range move (MoveOut/MoveIn) for change streams tracking the table.
+     * Uses the {@code AddSplitPoints} admin API, which requires the
+     * {@code spanner.databases.addSplitPoints} permission (granted by the
+     * {@code roles/spanner.databaseAdmin} IAM role).
+     *
+     * <p>Cloud Spanner enforces a strict per-minute quota on the number of split points that can
+     * be processed (as low as 1/minute on small test instances), so calls are retried with a
+     * cooldown when the request is throttled with {@code RESOURCE_EXHAUSTED}.
      */
     public void forceSplit(String tableName, Duration expiry, String... keyParts) {
         int maxAttempts = 4;
@@ -238,12 +236,6 @@ public class Connection {
         createChangeStreamWithValueCaptureType(changeStreamName, "NEW_ROW_AND_OLD_VALUES", partitionMode, tables);
     }
 
-    /**
-     * Shared by the {@code value_capture_type} variants above. Omits {@code partition_mode}
-     * entirely for {@link PartitionMode#IMMUTABLE_KEY_RANGE} - the emulator's DDL parser rejects
-     * that option outright even when the value requested is the documented default (see
-     * {@link #createChangeStream(String, PartitionMode, String...)}).
-     */
     private void createChangeStreamWithValueCaptureType(String changeStreamName, String valueCaptureType,
                                                         PartitionMode partitionMode, String... tables)
             throws ExecutionException, InterruptedException {
@@ -253,7 +245,7 @@ public class Connection {
                 "            value_capture_type = '" + valueCaptureType + "',\n" +
                 "            partition_mode = '" + partitionMode.name() + "'\n" +
                 "        ) "));
-        await().atMost(Duration.ofSeconds(ddlWaitTimeSeconds())).until(() -> streamExists(changeStreamName));
+        await().atMost(Duration.ofSeconds(ddlWaitTimeSeconds())).until(() -> isStreamExist(changeStreamName));
     }
 
     public void createChangeStreamExcludeDelete(String changeStreamName, PartitionMode partitionMode, String... tables)
@@ -276,12 +268,6 @@ public class Connection {
         createChangeStreamWithBooleanOption(changeStreamName, "allow_txn_exclusion", partitionMode, tables);
     }
 
-    /**
-     * Shared by the boolean-flag {@code value_capture_type}-independent options above. Omits
-     * {@code partition_mode} entirely for {@link PartitionMode#IMMUTABLE_KEY_RANGE} - the
-     * emulator's DDL parser rejects that option outright even when the value requested is the
-     * documented default (see {@link #createChangeStream(String, PartitionMode, String...)}).
-     */
     private void createChangeStreamWithBooleanOption(String changeStreamName, String optionName,
                                                      PartitionMode partitionMode, String... tables)
             throws ExecutionException, InterruptedException {
@@ -291,7 +277,7 @@ public class Connection {
                 "            " + optionName + " = true,\n" +
                 "            partition_mode = '" + partitionMode.name() + "'\n" +
                 "        ) "));
-        await().atMost(Duration.ofSeconds(ddlWaitTimeSeconds())).until(() -> streamExists(changeStreamName));
+        await().atMost(Duration.ofSeconds(ddlWaitTimeSeconds())).until(() -> isStreamExist(changeStreamName));
     }
 
     public void createChangeStreamExcludeTtlDeletes(String changeStreamName, PartitionMode partitionMode, String... tables)
@@ -304,14 +290,9 @@ public class Connection {
         this.updateDDL(List.of("create change stream " + changeStreamName + " for " +
                 (tables.length == 0 ? "ALL" : String.join(",", tables)) +
                 " OPTIONS ( partition_mode = '" + partitionMode.name() + "' )"));
-        await().atMost(Duration.ofSeconds(60)).until(() -> streamExists(changeStreamName));
+        await().atMost(Duration.ofSeconds(60)).until(() -> isStreamExist(changeStreamName));
     }
 
-    /**
-     * Creates a {@code PLACEMENT} mapped to an existing, pre-provisioned instance partition -
-     * see {@code doc/real-spanner-testing.md} for how {@code instancePartitionId} values are
-     * provisioned.
-     */
     public void createPlacement(String placementName, String instancePartitionId) throws ExecutionException, InterruptedException {
         if (!instancePartitionExists(instancePartitionId)) {
             throw new IllegalStateException(
@@ -390,7 +371,7 @@ public class Connection {
         return instanceId;
     }
 
-    private boolean streamExists(String streamName) {
+    private boolean isStreamExist(String streamName) {
         Statement statement;
         if (schemaDao.isPostgres()) {
             statement = Statement.newBuilder("select change_stream_name " +
@@ -412,7 +393,7 @@ public class Connection {
 
     public boolean dropTable(String tableName) throws InterruptedException {
         try {
-            if (!tableExists(tableName)) {
+            if (!isTableExist(tableName)) {
                 return false;
             }
             this.updateDDL(List.of("drop table " + tableName));
@@ -426,7 +407,7 @@ public class Connection {
 
     public boolean dropChangeStream(String changeStreamName) throws InterruptedException {
         try {
-            if (!this.changeStreamExists(changeStreamName)) {
+            if (!this.isChangeStreamExist(changeStreamName)) {
                 return false;
             }
             this.updateDDL(List.of("drop change stream " + changeStreamName));
@@ -439,7 +420,7 @@ public class Connection {
         return true;
     }
 
-    public boolean changeStreamExists(String changeStreamName) {
+    public boolean isChangeStreamExist(String changeStreamName) {
         Statement statement;
         if (schemaDao.isPostgres()) {
             statement = Statement.newBuilder("select * from information_schema.change_streams " +
@@ -456,7 +437,7 @@ public class Connection {
         }
     }
 
-    public boolean tableExists(String tableName) {
+    public boolean isTableExist(String tableName) {
         Statement statement;
         if (schemaDao.isPostgres()) {
             statement = Statement
@@ -477,7 +458,7 @@ public class Connection {
         }
     }
 
-    public boolean databaseExists(String databaseId) {
+    public boolean isDatabaseExist(String databaseId) {
         try {
             return this.spanner.getDatabaseAdminClient().getDatabase(instanceId, databaseId) != null;
         }
@@ -517,7 +498,7 @@ public class Connection {
 
         this.init();
 
-        if (databaseExists(databaseId)) {
+        if (isDatabaseExist(databaseId)) {
             this.dropDatabase(databaseId);
         }
 

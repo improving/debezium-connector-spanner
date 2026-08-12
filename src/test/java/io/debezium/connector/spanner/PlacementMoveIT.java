@@ -154,22 +154,11 @@ public class PlacementMoveIT extends AbstractSpannerConnectorIT {
      * is always physically co-located with its parent row, so it must move with the parent
      * whenever the parent's placement key changes.
      *
-     * <p><b>Open design question this test exists to answer</b> - not yet resolved by
-     * reading the Spanner docs alone: does the child table produce its own correlated
-     * signal when the parent moves (even though no DML touched the child), the way
-     * {@link InterleavedTableIT} proved a cascading {@code DELETE} does? Or does the
-     * child's data move silently, observable only indirectly via subsequent child reads
-     * being correctly ordered relative to the parent's move? The Spanner docs describe
-     * {@code PartitionEventRecord} at the key-range level, not in per-table terms, so this
-     * needs resolving during design review once {@code MUTABLE_KEY_RANGE} semantics are
-     * understood in more depth against a real project.
-     *
-     * <p>The connector's current implementation is suggestive but not conclusive: its
-     * {@code PartitionEventEvent} dispatch operates purely at the key-range/partition level
-     * (internal move-out and processed-timestamp bookkeeping via {@code PartitionManager}),
-     * with no new per-table Kafka record or {@code SourceInfo} field introduced. That's
-     * consistent with "the child moves silently," but isn't the same as confirming it against
-     * a real move - still needs settling once this scenario can actually run.
+     * <p>The connector doesn't surface a move as a Kafka record or {@code SourceInfo} field for
+     * either the parent or the child - {@code PartitionEventEvent} dispatch only drives internal
+     * move-out/processed-timestamp bookkeeping via {@code PartitionManager}. So correct ordering
+     * of a follow-up child write relative to the parent's move is the only observable signal that
+     * the child moved with it.
      */
     @Test
     public void shouldMoveInterleavedChildRowsWithParentPlacementChange() throws Exception {

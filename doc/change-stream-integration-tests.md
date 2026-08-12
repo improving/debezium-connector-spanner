@@ -3,16 +3,10 @@
 Here is a comprehensive list explaining each integration test added for testing change streams.
 
 Tests are grouped by file. Within each file, tests are listed in the order they appear in
-the file. Each test runs against one of three possibilities:
+the file. Each test runs against one of two possibilities:
 
 - **The local Docker Spanner emulator** - the default backend for most of these tests, no
   extra flags needed.
-- **Spanner Omni Docker Container** - a Docker-based fallback backend for `MUTABLE_KEY_RANGE`
-  testing, used because the local emulator's DDL parser rejects a `MUTABLE_KEY_RANGE` change
-  stream outright. Kept as a lightweight, no-cloud-dependency option for local runs; the full
-  `MutableKeyRangeIT` suite has since been re-validated against a real Spanner instance as well
-  (see below), and a small number of Omni-specific gaps have been identified and are called out
-  where relevant.
 - **A real, multi-region Spanner instance** (`-Dspanner.test.real=true`, on classes annotated
   `@RealSpannerCompatible` that also override their connection/config to use it - currently
   `ChangeStreamCorrectContentIT`, `ChangeStreamFilterIT`, `ChangeStreamOrderingAndTransactionalIT`,
@@ -114,10 +108,7 @@ Subset of the test above, for rows inserted after the schema change only: insert
 both inserts are delivered correctly - including the second one correctly showing the new
 column's value - proving the schema change is picked up automatically without a restart or
 reconfiguration. Deliberately doesn't touch the pre-existing-row-UPDATE path exercised by the
-test above, since Spanner Omni drops any UPDATE to a pre-existing row once the table has a
-third column of type INT64 (confirmed Omni-specific, not a connector bug) - `shouldPickUpSchemaChangeMidStream`
-self-skips against Omni for that reason, and this test gives Omni runs some coverage of the
-scenario regardless.
+test above, keeping this scenario isolated to newly-inserted rows.
 
 **`shouldResumeCorrectlyAfterWindowSizeIsChangedAcrossRestart`**
 Starts the connector with one window size, inserts a row, confirms delivery, then stops the
@@ -157,8 +148,8 @@ distinguished from "field never set" on the return-to-null step.
 Inserts a row with several columns, then updates only one of them. Confirms `before` and
 `after` both correctly carry through the untouched columns' values, showing a real
 old-to-new transition only for the column that was actually touched. Passes against the
-emulator and Spanner Omni, which both include the full row in an UPDATE's `old_values`/
-`new_values` JSON regardless of which columns changed. **Self-skips against real Spanner**
+emulator, which includes the full row in an UPDATE's `old_values`/`new_values` JSON
+regardless of which columns changed. **Self-skips against real Spanner**
 (`Assumptions.assumeTrue`), on both partition modes: an unchanged column comes back `null` in
 the UPDATE's `before`/`after` struct instead of its real value. Root cause: under `OLD_AND_NEW_VALUES`
 (the connector's only supported `value_capture_type`), real Spanner's change-stream payload
@@ -341,10 +332,9 @@ instead of its real prior value.
 
 **Runs against:** the local Docker emulator only, and deliberately so - this test relies on
 the emulator's own quirk of automatically re-splitting partitions on a timer, which real
-Spanner doesn't do (real Spanner splits based on load, not a fixed schedule). That's not a
-temporary stand-in situation like Omni above; the emulator's timer-driven splitting is used
-on purpose here to get a churning partition topology "for free" without needing to force a
-split manually.
+Spanner doesn't do (real Spanner splits based on load, not a fixed schedule). The emulator's
+timer-driven splitting is used on purpose here to get a churning partition topology "for free"
+without needing to force a split manually.
 
 **`shouldDeliverFollowUpWriteExactlyOnceAndInOrderAcrossBackgroundPartitionSplits`**
 Parameterized across both partition modes, but only `IMMUTABLE_KEY_RANGE` actually runs;
@@ -461,11 +451,10 @@ deployed connector.
 Inserts a parent row with an interleaved child row (the child has no placement key of
 its own and always moves with its parent), then moves the parent between placements.
 Confirms the parent's move event shows the new region, and that a follow-up update on the
-child is correctly ordered after the parent's move timestamp. Answers the open question this
-test was written to settle: the connector doesn't surface a move as a Kafka record or
-`SourceInfo` field for either the parent or the child, so correct ordering is the only
-observable signal that the child moved with its parent - there is no separate,
-directly-observable move event to assert on. Confirmed passing against real Spanner.
+child is correctly ordered after the parent's move timestamp - the only observable signal
+that the child moved with its parent, since the connector doesn't surface a move as a Kafka
+record or `SourceInfo` field for either the parent or the child. Confirmed passing against
+real Spanner.
 
 **`shouldOrderCascadingDeleteCorrectlyRelativeToInFlightPlacementMove`**
 Inserts a parent row with an interleaved child (using `ON DELETE CASCADE`), moves the
@@ -488,19 +477,4 @@ Inserts one row eligible for immediate TTL eviction and a second row with a far-
 expiration that's explicitly deleted by the user, on a change stream configured with
 `exclude_ttl_deletes`. Confirms the user-issued delete and its tombstone still arrive
 normally, while no delete or tombstone ever appears for the TTL-expired row.
-
-## Blocked / disabled - TTL eviction
-
-`TtlDeleteEventIT` is entirely `@Disabled`, parameterized across both partition modes. Confirmed
-on the emulator, both partition modes: only the insert record ever arrives (`hasSize(3)` fails
-with 1), since TTL-driven row eviction never actually runs there within any test-practical
-time window. Unblocking this needs a real Spanner instance where TTL eviction actually runs on
-a test-practical schedule.
-
-**`TtlDeleteEventIT.shouldEmitDeleteAsSystemTransactionWhenRowExpiresViaTtl`**
-Would insert a row with its TTL expiration already 2 days in the past (immediately eligible
-for garbage collection) into a table with a 1-day row-deletion TTL policy, and confirm the
-resulting TTL-triggered delete's `source.system_transaction` field is `true` - the only
-scenario in the whole suite that would exercise a positive `system_transaction` value, since
-every other event in these tests comes from ordinary user DML and is always `false`.
 
