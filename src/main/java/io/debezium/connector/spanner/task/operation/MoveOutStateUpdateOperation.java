@@ -57,7 +57,10 @@ public class MoveOutStateUpdateOperation implements Operation {
         List<PartitionState> updatedPartitions = currentTaskState.getPartitions().stream()
                 .map(partitionState -> {
                     if (partitionState.getToken().equals(token)) {
-                        List<MoveOutState> mergedMoveOutStates = new ArrayList<>(partitionState.getMoveOutStates());
+                        List<MoveOutState> mergedMoveOutStates = partitionState.getMoveOutStates().stream()
+                                .map(existingMoveOutState -> replaceOlderDestinations(existingMoveOutState, newMoveOutState))
+                                .filter(existingMoveOutState -> !existingMoveOutState.getDestPartitionTokens().isEmpty())
+                                .collect(Collectors.toCollection(ArrayList::new));
                         mergedMoveOutStates.add(newMoveOutState);
                         return partitionState.toBuilder()
                                 .moveOutStates(mergedMoveOutStates)
@@ -73,5 +76,20 @@ public class MoveOutStateUpdateOperation implements Operation {
         return taskSyncContext.toBuilder()
                 .currentTaskState(currentTaskState.toBuilder().partitions(updatedPartitions).build())
                 .build();
+    }
+
+    /**
+     * Drops the destinations from an existing {@link MoveOutState} that are also present in the
+     * new, newer MoveOut event, since the new event's timestamp supersedes the older one for
+     * those destinations. Destinations not covered by the new event are left untouched.
+     */
+    private static MoveOutState replaceOlderDestinations(MoveOutState existingMoveOutState, MoveOutState newMoveOutState) {
+        if (existingMoveOutState.getTimestamp().compareTo(newMoveOutState.getTimestamp()) >= 0) {
+            return existingMoveOutState;
+        }
+        List<String> remainingDestinations = existingMoveOutState.getDestPartitionTokens().stream()
+                .filter(destination -> !newMoveOutState.getDestPartitionTokens().contains(destination))
+                .collect(Collectors.toList());
+        return new MoveOutState(existingMoveOutState.getTimestamp(), remainingDestinations);
     }
 }
