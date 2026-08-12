@@ -8,8 +8,6 @@ package io.debezium.connector.spanner;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.time.Instant;
-import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -61,16 +59,7 @@ public class InterleavedTableIT extends AbstractSpannerConnectorIT {
                 + "INTERLEAVE IN PARENT " + parentTableName + " ON DELETE CASCADE");
         databaseConnection.createChangeStream(changeStreamName, partitionMode, parentTableName, childTableName);
         try {
-            Configuration.Builder configBuilder = Configuration.copy(baseConfig)
-                    .with("gcp.spanner.change.stream", changeStreamName)
-                    .with("name", parentTableName + "_test")
-                    .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()));
-            if (partitionMode == PartitionMode.MUTABLE_KEY_RANGE) {
-                // The connector's sliding window for MUTABLE_KEY_RANGE defaults to 20 minutes;
-                // narrow it to the minimum so records surface within this test's wait budget.
-                configBuilder.with("gcp.spanner.mutable.window.minutes", 1);
-            }
-            final Configuration config = configBuilder.build();
+            final Configuration config = buildTestConfig(baseConfig, changeStreamName, parentTableName, partitionMode);
 
             clearKafkaTopics();
             initializeConnectorTestFramework();

@@ -8,8 +8,6 @@ package io.debezium.connector.spanner;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.time.Instant;
-import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -66,11 +64,7 @@ public class CrossPartitionSplitOrderingIT extends AbstractSpannerConnectorIT {
         databaseConnection.createTable(tableName + "(id INT64, value STRING(100)) PRIMARY KEY (id)");
         databaseConnection.createChangeStream(changeStreamName, partitionMode, tableName);
         try {
-            final Configuration config = Configuration.copy(baseConfig)
-                    .with("gcp.spanner.change.stream", changeStreamName)
-                    .with("name", tableName + "_test")
-                    .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()))
-                    .build();
+            final Configuration config = buildTestConfig(baseConfig, changeStreamName, tableName, partitionMode);
 
             initializeConnectorTestFramework();
             start(SpannerConnector.class, config);

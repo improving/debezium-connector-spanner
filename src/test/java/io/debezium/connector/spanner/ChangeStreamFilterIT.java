@@ -8,8 +8,6 @@ package io.debezium.connector.spanner;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.time.Instant;
-import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -82,16 +80,7 @@ public class ChangeStreamFilterIT extends AbstractSpannerConnectorIT {
         databaseConnection.createTable(tableNameExcludeDelete + "(id INT64, name STRING(100)) PRIMARY KEY (id)");
         databaseConnection.createChangeStreamExcludeDelete(changeStreamNameExcludeDelete, partitionMode, tableNameExcludeDelete);
         try {
-            Configuration.Builder configBuilder = Configuration.copy(baseConfig)
-                    .with("gcp.spanner.change.stream", changeStreamNameExcludeDelete)
-                    .with("name", tableNameExcludeDelete + "_test")
-                    .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()));
-            if (partitionMode == PartitionMode.MUTABLE_KEY_RANGE) {
-                // The connector's sliding window for MUTABLE_KEY_RANGE defaults to 20 minutes;
-                // narrow it to the minimum so records surface within this test's wait budget.
-                configBuilder.with("gcp.spanner.mutable.window.minutes", 1);
-            }
-            final Configuration config = configBuilder.build();
+            final Configuration config = buildTestConfig(baseConfig, changeStreamNameExcludeDelete, tableNameExcludeDelete, partitionMode);
 
             start(SpannerConnector.class, config);
             assertConnectorIsRunning();
@@ -137,16 +126,7 @@ public class ChangeStreamFilterIT extends AbstractSpannerConnectorIT {
         databaseConnection.createTable(tableNameExcludeInsert + "(id INT64, name STRING(100)) PRIMARY KEY (id)");
         databaseConnection.createChangeStreamExcludeInsert(changeStreamNameExcludeInsert, partitionMode, tableNameExcludeInsert);
         try {
-            Configuration.Builder configBuilder = Configuration.copy(baseConfig)
-                    .with("gcp.spanner.change.stream", changeStreamNameExcludeInsert)
-                    .with("name", tableNameExcludeInsert + "_test")
-                    .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()));
-            if (partitionMode == PartitionMode.MUTABLE_KEY_RANGE) {
-                // The connector's sliding window for MUTABLE_KEY_RANGE defaults to 20 minutes;
-                // narrow it to the minimum so records surface within this test's wait budget.
-                configBuilder.with("gcp.spanner.mutable.window.minutes", 1);
-            }
-            final Configuration config = configBuilder.build();
+            final Configuration config = buildTestConfig(baseConfig, changeStreamNameExcludeInsert, tableNameExcludeInsert, partitionMode);
 
             start(SpannerConnector.class, config);
             assertConnectorIsRunning();
@@ -200,16 +180,7 @@ public class ChangeStreamFilterIT extends AbstractSpannerConnectorIT {
         databaseConnection.createTable(tableNameExcludeUpdate + "(id INT64, name STRING(100)) PRIMARY KEY (id)");
         databaseConnection.createChangeStreamExcludeUpdate(changeStreamNameExcludeUpdate, partitionMode, tableNameExcludeUpdate);
         try {
-            Configuration.Builder configBuilder = Configuration.copy(baseConfig)
-                    .with("gcp.spanner.change.stream", changeStreamNameExcludeUpdate)
-                    .with("name", tableNameExcludeUpdate + "_test")
-                    .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()));
-            if (partitionMode == PartitionMode.MUTABLE_KEY_RANGE) {
-                // The connector's sliding window for MUTABLE_KEY_RANGE defaults to 20 minutes;
-                // narrow it to the minimum so records surface within this test's wait budget.
-                configBuilder.with("gcp.spanner.mutable.window.minutes", 1);
-            }
-            final Configuration config = configBuilder.build();
+            final Configuration config = buildTestConfig(baseConfig, changeStreamNameExcludeUpdate, tableNameExcludeUpdate, partitionMode);
 
             start(SpannerConnector.class, config);
             assertConnectorIsRunning();
@@ -267,16 +238,7 @@ public class ChangeStreamFilterIT extends AbstractSpannerConnectorIT {
         databaseConnection.createTable(tableNameTxnExclusion + "(id INT64, name STRING(100)) PRIMARY KEY (id)");
         databaseConnection.createChangeStreamAllowTxnExclusion(changeStreamNameTxnExclusion, partitionMode, tableNameTxnExclusion);
         try {
-            Configuration.Builder configBuilder = Configuration.copy(baseConfig)
-                    .with("gcp.spanner.change.stream", changeStreamNameTxnExclusion)
-                    .with("name", tableNameTxnExclusion + "_test")
-                    .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()));
-            if (partitionMode == PartitionMode.MUTABLE_KEY_RANGE) {
-                // The connector's sliding window for MUTABLE_KEY_RANGE defaults to 20 minutes;
-                // narrow it to the minimum so records surface within this test's wait budget.
-                configBuilder.with("gcp.spanner.mutable.window.minutes", 1);
-            }
-            final Configuration config = configBuilder.build();
+            final Configuration config = buildTestConfig(baseConfig, changeStreamNameTxnExclusion, tableNameTxnExclusion, partitionMode);
 
             start(SpannerConnector.class, config);
             assertConnectorIsRunning();

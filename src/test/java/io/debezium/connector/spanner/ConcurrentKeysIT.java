@@ -8,8 +8,6 @@ package io.debezium.connector.spanner;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.time.Instant;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -101,16 +99,7 @@ public class ConcurrentKeysIT extends AbstractSpannerConnectorIT {
                 + "(id INT64, name STRING(100), score INT64) PRIMARY KEY (id)");
         databaseConnection.createChangeStream(changeStreamName, partitionMode, tableName);
         try {
-            Configuration.Builder configBuilder = Configuration.copy(baseConfig)
-                    .with("gcp.spanner.change.stream", changeStreamName)
-                    .with("name", tableName + "_test")
-                    .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()));
-            if (partitionMode == PartitionMode.MUTABLE_KEY_RANGE) {
-                // The connector's sliding window for MUTABLE_KEY_RANGE defaults to 20 minutes;
-                // narrow it to the minimum so records surface within this test's wait budget.
-                configBuilder.with("gcp.spanner.mutable.window.minutes", 1);
-            }
-            final Configuration config = configBuilder.build();
+            final Configuration config = buildTestConfig(baseConfig, changeStreamName, tableName, partitionMode);
 
             clearKafkaTopics();
             initializeConnectorTestFramework();

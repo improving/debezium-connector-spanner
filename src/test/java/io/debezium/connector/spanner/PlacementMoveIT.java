@@ -8,8 +8,6 @@ package io.debezium.connector.spanner;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.time.Instant;
-import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -23,6 +21,7 @@ import org.junit.jupiter.api.Test;
 
 import io.debezium.config.Configuration;
 import io.debezium.connector.spanner.util.Connection;
+import io.debezium.connector.spanner.util.PartitionMode;
 
 /**
  * The real-Cloud-Spanner placement-move scenarios, sharing a single {@code east}/{@code west}
@@ -86,12 +85,7 @@ public class PlacementMoveIT extends AbstractSpannerConnectorIT {
                 + "PRIMARY KEY (id)");
         databaseConnection.createMutableKeyRangeChangeStream(changeStreamName, tableName);
         try {
-            final Configuration config = Configuration.copy(baseConfig)
-                    .with("gcp.spanner.change.stream", changeStreamName)
-                    .with("name", tableName + "_test")
-                    .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()))
-                    .with("gcp.spanner.mutable.window.minutes", 1)
-                    .build();
+            final Configuration config = buildTestConfig(baseConfig, changeStreamName, tableName, PartitionMode.MUTABLE_KEY_RANGE);
 
             clearKafkaTopics();
             initializeConnectorTestFramework();
@@ -173,12 +167,7 @@ public class PlacementMoveIT extends AbstractSpannerConnectorIT {
         databaseConnection.createMutableKeyRangeChangeStream(interleavedChangeStreamName,
                 interleavedParentTableName, interleavedChildTableName);
         try {
-            final Configuration config = Configuration.copy(baseConfig)
-                    .with("gcp.spanner.change.stream", interleavedChangeStreamName)
-                    .with("name", interleavedParentTableName + "_test")
-                    .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()))
-                    .with("gcp.spanner.mutable.window.minutes", 1)
-                    .build();
+            final Configuration config = buildTestConfig(baseConfig, interleavedChangeStreamName, interleavedParentTableName, PartitionMode.MUTABLE_KEY_RANGE);
 
             clearKafkaTopics();
             initializeConnectorTestFramework();
@@ -244,12 +233,7 @@ public class PlacementMoveIT extends AbstractSpannerConnectorIT {
         databaseConnection.createMutableKeyRangeChangeStream(cascadeChangeStreamName,
                 cascadeParentTableName, cascadeChildTableName);
         try {
-            final Configuration config = Configuration.copy(baseConfig)
-                    .with("gcp.spanner.change.stream", cascadeChangeStreamName)
-                    .with("name", cascadeParentTableName + "_test")
-                    .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()))
-                    .with("gcp.spanner.mutable.window.minutes", 1)
-                    .build();
+            final Configuration config = buildTestConfig(baseConfig, cascadeChangeStreamName, cascadeParentTableName, PartitionMode.MUTABLE_KEY_RANGE);
 
             clearKafkaTopics();
             initializeConnectorTestFramework();

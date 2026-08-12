@@ -9,8 +9,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.time.Instant;
-import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -87,17 +85,7 @@ public class DataTypesIT extends AbstractSpannerConnectorIT {
                 + ") PRIMARY KEY (id)");
         databaseConnection.createChangeStream(gsqlChangeStreamName, partitionMode, gsqlTableName);
         try {
-            Configuration.Builder configBuilder = Configuration.copy(baseConfig)
-                    .with("gcp.spanner.change.stream", gsqlChangeStreamName)
-                    .with("name", gsqlTableName + "_test")
-                    .with("gcp.spanner.start.time",
-                            DateTimeFormatter.ISO_INSTANT.format(Instant.now()));
-            if (partitionMode == PartitionMode.MUTABLE_KEY_RANGE) {
-                // The connector's sliding window for MUTABLE_KEY_RANGE defaults to 20 minutes;
-                // narrow it to the minimum so records surface within this test's wait budget.
-                configBuilder.with("gcp.spanner.mutable.window.minutes", 1);
-            }
-            final Configuration config = configBuilder.build();
+            final Configuration config = buildTestConfig(baseConfig, gsqlChangeStreamName, gsqlTableName, partitionMode);
 
             initializeConnectorTestFramework();
             start(SpannerConnector.class, config);
@@ -177,16 +165,7 @@ public class DataTypesIT extends AbstractSpannerConnectorIT {
                 + "unicode_name STRING(100), tags ARRAY<STRING(50)>) PRIMARY KEY (id)");
         databaseConnection.createChangeStream(edgeCasesChangeStreamName, partitionMode, edgeCasesTableName);
         try {
-            Configuration.Builder configBuilder = Configuration.copy(baseConfig)
-                    .with("gcp.spanner.change.stream", edgeCasesChangeStreamName)
-                    .with("name", edgeCasesTableName + "_test")
-                    .with("gcp.spanner.start.time", DateTimeFormatter.ISO_INSTANT.format(Instant.now()));
-            if (partitionMode == PartitionMode.MUTABLE_KEY_RANGE) {
-                // The connector's sliding window for MUTABLE_KEY_RANGE defaults to 20 minutes;
-                // narrow it to the minimum so records surface within this test's wait budget.
-                configBuilder.with("gcp.spanner.mutable.window.minutes", 1);
-            }
-            final Configuration config = configBuilder.build();
+            final Configuration config = buildTestConfig(baseConfig, edgeCasesChangeStreamName, edgeCasesTableName, partitionMode);
 
             initializeConnectorTestFramework();
             start(SpannerConnector.class, config);
