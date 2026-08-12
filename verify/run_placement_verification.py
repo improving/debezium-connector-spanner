@@ -10,7 +10,7 @@ Key Placement Column):
   4. End-to-End Replication Latency SLA Metrics
 
 Location:
-  verify/run_placement_verification.py
+experimental/users/testuser/spanner/kafka/run_placement_verification.py
 """
 
 import argparse
@@ -22,16 +22,20 @@ import sys
 import time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_PROJECT = "my-gcp-project"
-DEFAULT_INSTANCE = "my-spanner-instance"
-DEFAULT_DATABASE = "my-database"
+DEFAULT_PROJECT = os.environ.get("GCP_PROJECT", "my-gcp-project")
+DEFAULT_INSTANCE = os.environ.get("SPANNER_INSTANCE", "my-spanner-instance")
+DEFAULT_DATABASE = os.environ.get("SPANNER_DATABASE", "my-database")
 DEFAULT_TABLE = "BenchmarkPlacementUsers"
-DEFAULT_TOPIC = "cdc.BenchmarkPlacementUsers"
-DEFAULT_BUCKET = "my-cdc-audit-bucket"
-DEFAULT_KEY_FILE = "/path/to/service-account-key.json"
+DEFAULT_TOPIC = "cdc_spanner.BenchmarkPlacementUsers"
+DEFAULT_BUCKET = os.environ.get("GCS_AUDIT_BUCKET", "my-cdc-audit-bucket")
+DEFAULT_KEY_FILE = os.environ.get(
+    "GOOGLE_APPLICATION_CREDENTIALS", "/path/to/service-account-key.json"
+)
 
 
-def get_topic_high_watermarks(topic: str) -> dict:
+def get_topic_high_watermarks(
+    topic: str, key_file: str = DEFAULT_KEY_FILE
+) -> dict:
   try:
     cmd = [
         "kubectl",
@@ -49,7 +53,12 @@ def get_topic_high_watermarks(topic: str) -> dict:
         "--time",
         "-1",
     ]
-    res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    env = os.environ.copy()
+    if os.path.exists(key_file):
+      env["GOOGLE_APPLICATION_CREDENTIALS"] = key_file
+    res = subprocess.run(
+        cmd, capture_output=True, text=True, check=True, env=env
+    )
     offsets = {}
     for line in res.stdout.strip().split("\n"):
       if ":" in line:
@@ -60,6 +69,225 @@ def get_topic_high_watermarks(topic: str) -> dict:
   except Exception as e:
     print(f"Notice: Could not query topic high watermarks ({e}).")
     return {}
+
+
+def parse_gcsb_audit_info(
+    bucket: str, run_id: str, key_file: str = DEFAULT_KEY_FILE
+):
+  env = os.environ.copy()
+  if os.path.exists(key_file):
+    env["GOOGLE_APPLICATION_CREDENTIALS"] = key_file
+  res = subprocess.run(
+      ["gsutil", "cat", f"gs://{bucket}/{run_id}/gcsb_audit/*.jsonl"],
+      capture_output=True,
+      text=True,
+      env=env,
+  )
+  count = 0
+  max_ts_micros = 0
+  max_ts_iso = None
+  for line in res.stdout.strip().split("\n"):
+    if not line:
+      continue
+    try:
+      row = json.loads(line)
+      count += 1
+      c_ts = row.get("commit_ts")
+      if c_ts:
+        dt = datetime.datetime.fromisoformat(c_ts.replace("Z", "+00:00"))
+        micros = int(dt.timestamp() * 1_000_000)
+        if micros > max_ts_micros:
+          max_ts_micros = micros
+          max_ts_iso = c_ts
+    except Exception:
+      pass
+  return count, max_ts_micros, max_ts_iso
+
+
+def get_partition_latest_timestamp(
+    topic: str,
+    partition: int,
+    high_watermark: int,
+    key_file: str = DEFAULT_KEY_FILE,
+) -> int:
+  if high_watermark <= 0:
+    return None
+  cmd = [
+      "kubectl",
+      "exec",
+      "kafka-cp-kafka-0",
+      "-c",
+      "cp-kafka-broker",
+      "--",
+      "kafka-console-consumer",
+      "--bootstrap-server",
+      "localhost:9092",
+      "--topic",
+      topic,
+      "--partition",
+      str(partition),
+      "--offset",
+      str(high_watermark - 1),
+      "--max-messages",
+      "1",
+      "--timeout-ms",
+      "3000",
+  ]
+  env = os.environ.copy()
+  if os.path.exists(key_file):
+    env["GOOGLE_APPLICATION_CREDENTIALS"] = key_file
+  try:
+    res = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    for line in res.stdout.strip().split("\n"):
+      if not line:
+        continue
+      try:
+        data = json.loads(line)
+        payload = data.get("payload", data)
+        source = payload.get("source", {})
+        ts_us = source.get("ts_us")
+        ts_ms = source.get("ts_ms")
+        if ts_us:
+          return int(ts_us)
+        elif ts_ms:
+          return int(ts_ms) * 1000
+      except Exception:
+        pass
+  except Exception:
+    pass
+  return None
+
+
+def count_partition_data_records(
+    topic: str,
+    partition: int,
+    start_offset: int,
+    current_offset: int,
+    key_file: str = DEFAULT_KEY_FILE,
+) -> int:
+  if current_offset <= start_offset:
+    return 0
+  max_msgs = current_offset - start_offset
+  cmd = [
+      "kubectl",
+      "exec",
+      "kafka-cp-kafka-0",
+      "-c",
+      "cp-kafka-broker",
+      "--",
+      "kafka-console-consumer",
+      "--bootstrap-server",
+      "localhost:9092",
+      "--topic",
+      topic,
+      "--partition",
+      str(partition),
+      "--offset",
+      str(start_offset),
+      "--max-messages",
+      str(max_msgs),
+      "--timeout-ms",
+      "3000",
+  ]
+  env = os.environ.copy()
+  if os.path.exists(key_file):
+    env["GOOGLE_APPLICATION_CREDENTIALS"] = key_file
+  try:
+    res = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    c = 0
+    for line in res.stdout.strip().split("\n"):
+      if not line:
+        continue
+      try:
+        data = json.loads(line)
+        payload = data.get("payload", data)
+        if payload.get("op") in ("c", "u", "d"):
+          c += 1
+      except Exception:
+        pass
+    return c
+  except Exception:
+    return 0
+
+
+def wait_for_cdc_catchup(
+    topic: str,
+    target_commit_ts_micros: int,
+    expected_records: int,
+    start_offsets: dict,
+    timeout_sec: int = 300,
+    poll_interval_sec: int = 5,
+    key_file: str = DEFAULT_KEY_FILE,
+) -> bool:
+  import concurrent.futures
+
+  target_iso = datetime.datetime.fromtimestamp(
+      target_commit_ts_micros / 1_000_000, tz=datetime.timezone.utc
+  ).strftime("%Y-%m-%d %H:%M:%S UTC")
+  print(f"\n[Dynamic Catch-Up] Waiting for CDC stream to catch up...")
+  print(
+      f"  Target Workload Commit Timestamp : {target_iso}"
+      f" ({target_commit_ts_micros} us)"
+  )
+  print(f"  Expected Source Mutations        : {expected_records}")
+  print(
+      f"  Max Polling Timeout              : {timeout_sec}s (polling every"
+      f" {poll_interval_sec}s)"
+  )
+
+  start_time = time.time()
+  while time.time() - start_time < timeout_sec:
+    current_offsets = get_topic_high_watermarks(topic, key_file=key_file)
+    total_new_events = sum(
+        current_offsets.get(p, 0) - start_offsets.get(p, 0)
+        for p in current_offsets
+    )
+
+    # In parallel, count data change records ('c', 'u', 'd') across all partitions
+    active_partitions = list(current_offsets.keys())
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=min(10, len(active_partitions) or 1)
+    ) as executor:
+      futures = {
+          p: executor.submit(
+              count_partition_data_records,
+              topic,
+              p,
+              start_offsets.get(p, 0),
+              current_offsets[p],
+              key_file,
+          )
+          for p in active_partitions
+      }
+      part_counts = {p: f.result() for p, f in futures.items()}
+
+    total_data_records = sum(part_counts.values())
+    elapsed = int(time.time() - start_time)
+    pct = (
+        (total_data_records / expected_records * 100.0)
+        if expected_records > 0
+        else 100.0
+    )
+
+    print(
+        f"  [{elapsed:3d}s] Data Records:"
+        f" {total_data_records}/{expected_records} ({pct:5.1f}%) | Total Kafka"
+        f" Topic Events: {total_new_events}"
+    )
+
+    if total_data_records >= expected_records:
+      print(
+          f"\n[Dynamic Catch-Up] SUCCESS: CDC stream caught up in {elapsed}s!"
+          f" All {total_data_records}/{expected_records} mutations emitted to"
+          " Kafka."
+      )
+      time.sleep(2)  # Brief stabilization buffer
+      return True
+
+    time.sleep(poll_interval_sec)
+
+  print(f"\n[Dynamic Catch-Up] WARNING: Timed out after {timeout_sec}s.")
+  return False
 
 
 def execute_placement_verification(
@@ -110,40 +338,9 @@ def execute_placement_verification(
   )
   print("=" * 80 + "\n")
 
-  # Step 1: Start Downstream Event Collector (Kafka -> GCS)
-  collector_script = os.path.join(
-      SCRIPT_DIR, "collect", "kafka_gcs_collector.py"
-  )
-  collector_cmd = [
-      sys.executable,
-      collector_script,
-      f"--bucket={bucket}",
-      f"--run-id={run_id}",
-      f"--topic={topic}",
-      "--auto-spawn",
-  ]
-
-  print("Step 1/5: Launching Downstream Kafka-to-GCS Collector daemon...")
-  collector_log_file = f"/tmp/collector_{run_id}.log"
-  collector_log_fd = open(collector_log_file, "w")
-  collector_proc = subprocess.Popen(
-      collector_cmd,
-      stdout=collector_log_fd,
-      stderr=subprocess.STDOUT,
-      text=True,
-  )
-  time.sleep(3)  # Allow collector to start
-
-  if collector_proc.poll() is not None:
-    collector_log_fd.close()
-    with open(collector_log_file, "r") as f:
-      err_content = f.read()
-    print(f"ERROR: Downstream collector failed to start:\n{err_content}")
-    return False
-
-  # Capture starting topic partition offsets before workload so drain only reads new events
-  print("\nCapturing Kafka topic start offsets before workload run...")
-  start_offsets = get_topic_high_watermarks(topic)
+  # Step 1: Capture starting topic partition offsets before workload so drain only reads new events
+  print("Step 1/5: Capturing Kafka topic start offsets before workload run...")
+  start_offsets = get_topic_high_watermarks(topic, key_file=key_file)
   print(
       f"Captured start offsets for {len(start_offsets)} partitions:"
       f" {start_offsets}"
@@ -182,22 +379,30 @@ def execute_placement_verification(
     print(w_res.stdout)
   except subprocess.CalledProcessError as e:
     print(f"ERROR: GCSB workload runner failed:\n{e.stderr or e.stdout}")
-    collector_proc.terminate()
-    collector_log_fd.close()
     return False
 
-  # Step 3: Stop background collector and run multi-partition parallel drain
-  print("\nWaiting 45 seconds for CDC stream to catch up...")
-  time.sleep(45)
+  # Step 3: Dynamically wait for CDC stream to catch up to the workload's max commit timestamp
+  expected_mutations, max_commit_ts_micros, max_commit_ts_iso = (
+      parse_gcsb_audit_info(bucket=bucket, run_id=run_id, key_file=key_file)
+  )
+  if expected_mutations > 0 and max_commit_ts_micros > 0:
+    wait_for_cdc_catchup(
+        topic=topic,
+        target_commit_ts_micros=max_commit_ts_micros,
+        expected_records=expected_mutations,
+        start_offsets=start_offsets,
+        timeout_sec=600,
+        poll_interval_sec=5,
+        key_file=key_file,
+    )
+  else:
+    print(f"Notice: No GCSB audit mutations found, falling back to 30s wait...")
+    time.sleep(30)
 
   print("Step 3/5: Draining all Kafka topic partitions to high watermark...")
-  collector_proc.terminate()
-  try:
-    collector_proc.wait(timeout=5)
-  except subprocess.TimeoutExpired:
-    collector_proc.kill()
-  collector_log_fd.close()
-
+  collector_script = os.path.join(
+      SCRIPT_DIR, "collect", "kafka_gcs_collector.py"
+  )
   drain_cmd = [
       sys.executable,
       collector_script,
@@ -311,6 +516,8 @@ DownstreamEvents AS (
   FROM `{project}.{bq_dataset}.{kafka_table}` k
   WHERE k.op IN ('c', 'u', 'd')
     AND k.user_id IN (SELECT DISTINCT user_id FROM SourceMutations)
+    AND TIMESTAMP_MICROS(CAST(JSON_VALUE(k.payload.source.ts_us) AS INT64)) >= (SELECT TIMESTAMP_SUB(MIN(commit_ts), INTERVAL 1 SECOND) FROM SourceMutations)
+    AND TIMESTAMP_MICROS(CAST(JSON_VALUE(k.payload.source.ts_us) AS INT64)) <= (SELECT TIMESTAMP_ADD(MAX(commit_ts), INTERVAL 1 SECOND) FROM SourceMutations)
 ),
 MissingRecords AS (
   SELECT src.user_id, src.op AS gcsb_op, src.commit_ts

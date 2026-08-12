@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""gcsb_users_workload_runner.py
+"""
+gcsb_users_workload_runner.py
 
-Milestone 1/2 & Placement Table GCSB Load Generator Client Wrapper & Audit Logger for Cloud Spanner Users Table.
+Milestone 1 GCSB Load Generator Client Wrapper & Audit Logger for Cloud Spanner Users Table.
 Location: verify/gcsb/gcsb_users_workload_runner.py
 
 Features:
@@ -16,7 +17,7 @@ Usage:
   python3 gcsb_users_workload_runner.py \
     --project my-gcp-project \
     --instance my-spanner-instance \
-    --database my-database \
+    --database testdb \
     --bucket my-cdc-audit-bucket \
     --run-id run_m1_baseline \
     --operations 10000 \
@@ -35,13 +36,26 @@ import sys
 import time
 import uuid
 
-DEFAULT_PROJECT = "my-gcp-project"
-DEFAULT_INSTANCE = "my-spanner-instance"
-DEFAULT_DATABASE = "my-database"
+DEFAULT_PROJECT = os.environ.get("GCP_PROJECT", "my-gcp-project")
+DEFAULT_INSTANCE = os.environ.get("SPANNER_INSTANCE", "my-spanner-instance")
+DEFAULT_DATABASE = os.environ.get("SPANNER_DATABASE", "my-database")
 DEFAULT_TABLE = "BenchmarkUsers"
-DEFAULT_BUCKET = "my-cdc-audit-bucket"
+DEFAULT_BUCKET = os.environ.get("GCS_AUDIT_BUCKET", "my-cdc-audit-bucket")
 DEFAULT_RUN_ID = "run_m1_baseline"
-DEFAULT_KEY_FILE = "/path/to/service-account-key.json"
+DEFAULT_KEY_FILE = os.environ.get(
+    "GOOGLE_APPLICATION_CREDENTIALS", "/path/to/service-account-key.json"
+)
+
+
+import threading
+from decimal import Decimal
+
+try:
+  from google.cloud import spanner
+
+  HAVE_SPANNER_SDK = True
+except ImportError:
+  HAVE_SPANNER_SDK = False
 
 
 class GcsbAuditBuffer:
@@ -60,8 +74,16 @@ class GcsbAuditBuffer:
     self.buffer = []
     self.batch_counter = 0
     self.total_committed = 0
+    self.lock = threading.Lock()
     self.scratch_dir = "/tmp/gcsb_client_audit"
     os.makedirs(self.scratch_dir, exist_ok=True)
+
+  def record_entries(self, entries: list):
+    with self.lock:
+      self.buffer.extend(entries)
+      self.total_committed += len(entries)
+      if len(self.buffer) >= self.batch_size:
+        self.flush()
 
   def record_mutation(
       self,
@@ -105,11 +127,12 @@ class GcsbAuditBuffer:
         ),
         "before": None,
     }
-    self.buffer.append(entry)
-    self.total_committed += 1
+    with self.lock:
+      self.buffer.append(entry)
+      self.total_committed += 1
 
-    if len(self.buffer) >= self.batch_size:
-      self.flush()
+      if len(self.buffer) >= self.batch_size:
+        self.flush()
 
   def flush(self):
     if not self.buffer:
@@ -191,6 +214,9 @@ def run_workload(
   )
   is_rich = has_placement or str(milestone).lower() in ["2", "m2"]
 
+  if has_placement and table == DEFAULT_TABLE:
+    table = "BenchmarkPlacementUsers"
+
   if has_placement:
     milestone_label = (
         "Placement (PlacementKey: STRING PLACEMENT KEY + 8 Rich Columns)"
@@ -224,6 +250,423 @@ def run_workload(
   succ_deletes = 0
   err_count = 0
   available_placements = ["default", "p0", "p1", "p2", "p3", "p4", "p5"]
+
+  if HAVE_SPANNER_SDK:
+    try:
+      spanner_client = spanner.Client(project=project)
+      spanner_instance = spanner_client.instance(instance)
+      spanner_db = spanner_instance.database(database)
+
+      cols = (
+          [
+              "UserId",
+              "PlacementKey",
+              "UserName",
+              "UserEmail",
+              "AccountBalance",
+              "Metadata",
+              "LastLogin",
+              "IsActive",
+              "BinarySignature",
+          ]
+          if has_placement
+          else (
+              [
+                  "UserId",
+                  "UserName",
+                  "UserEmail",
+                  "AccountBalance",
+                  "Metadata",
+                  "LastLogin",
+                  "IsActive",
+                  "BinarySignature",
+              ]
+              if is_rich
+              else ["UserId", "UserName"]
+          )
+      )
+
+      def worker_task_batch(worker_id: int, ops_per_worker: int):
+        nonlocal succ_inserts, succ_updates, succ_deletes, err_count
+        run_epoch_prefix = (
+            int(time.time() * 100) % 100_000_000_000
+        ) * 1_000_000
+        base_id = run_epoch_prefix + worker_id * 100_000
+        active_ids = []
+        id_counter = 0
+        batch_step = 50
+        remaining_ops = ops_per_worker
+
+        while remaining_ops > 0:
+          current_batch_size = min(batch_step, remaining_ops)
+          upsert_rows = []
+          delete_keys = []
+          batch_audit = []
+          batch_used_ids = set()
+          new_batch_ids = []
+          b_ins = 0
+          b_upd = 0
+          b_del = 0
+
+          for _ in range(current_batch_size):
+            available_for_update = [
+                uid for uid in active_ids if uid not in batch_used_ids
+            ]
+            if len(active_ids) < 5 or not available_for_update:
+              op_choice = "INSERT"
+            else:
+              r = random.random()
+              if r < insert_ratio:
+                op_choice = "INSERT"
+              elif r < insert_ratio + update_ratio:
+                op_choice = "UPDATE"
+              else:
+                op_choice = "DELETE"
+
+            if op_choice == "INSERT":
+              id_counter += 1
+              user_id = base_id + id_counter
+              user_name = f"User_{user_id}_INIT"
+              new_batch_ids.append(user_id)
+              batch_used_ids.add(user_id)
+              if has_placement:
+                placement_key = random.choice(available_placements)
+                user_email = f"user_{user_id}@example.com"
+                balance = Decimal(
+                    f"{random.randint(100, 50000)}.{random.randint(10, 99)}"
+                )
+                meta_dict = {
+                    "role": random.choice(["admin", "member", "guest"]),
+                    "tier": random.choice(
+                        ["bronze", "silver", "gold", "platinum"]
+                    ),
+                    "pref_id": random.randint(1, 100),
+                }
+                metadata = json.dumps(meta_dict)
+                is_active = random.choice([True, False])
+                sig_raw = os.urandom(8)
+                sig_bytes = base64.b64encode(sig_raw)
+                sig_b64 = sig_bytes.decode("ascii")
+
+                upsert_rows.append([
+                    user_id,
+                    placement_key,
+                    user_name,
+                    user_email,
+                    balance,
+                    metadata,
+                    spanner.COMMIT_TIMESTAMP,
+                    is_active,
+                    sig_bytes,
+                ])
+                batch_audit.append({
+                    "client_tx_id": str(uuid.uuid4()),
+                    "op": "INSERT",
+                    "table": table,
+                    "user_id": user_id,
+                    "placement_key": placement_key,
+                    "user_name": user_name,
+                    "user_email": user_email,
+                    "account_balance": str(balance),
+                    "metadata": metadata,
+                    "is_active": is_active,
+                    "binary_signature": sig_b64,
+                    "commit_ts": None,
+                    "after": {
+                        "UserId": user_id,
+                        "PlacementKey": placement_key,
+                        "UserName": user_name,
+                        "UserEmail": user_email,
+                        "AccountBalance": str(balance),
+                        "Metadata": metadata,
+                        "IsActive": is_active,
+                        "BinarySignature": sig_b64,
+                    },
+                    "before": None,
+                })
+              elif is_rich:
+                user_email = f"user_{user_id}@example.com"
+                balance = Decimal(
+                    f"{random.randint(100, 50000)}.{random.randint(10, 99)}"
+                )
+                meta_dict = {
+                    "role": random.choice(["admin", "member", "guest"]),
+                    "tier": random.choice(
+                        ["bronze", "silver", "gold", "platinum"]
+                    ),
+                    "pref_id": random.randint(1, 100),
+                }
+                metadata = json.dumps(meta_dict)
+                is_active = random.choice([True, False])
+                sig_raw = os.urandom(8)
+                sig_bytes = base64.b64encode(sig_raw)
+                sig_b64 = sig_bytes.decode("ascii")
+
+                upsert_rows.append([
+                    user_id,
+                    user_name,
+                    user_email,
+                    balance,
+                    metadata,
+                    spanner.COMMIT_TIMESTAMP,
+                    is_active,
+                    sig_bytes,
+                ])
+                batch_audit.append({
+                    "client_tx_id": str(uuid.uuid4()),
+                    "op": "INSERT",
+                    "table": table,
+                    "user_id": user_id,
+                    "placement_key": None,
+                    "user_name": user_name,
+                    "user_email": user_email,
+                    "account_balance": str(balance),
+                    "metadata": metadata,
+                    "is_active": is_active,
+                    "binary_signature": sig_b64,
+                    "commit_ts": None,
+                    "after": {
+                        "UserId": user_id,
+                        "PlacementKey": None,
+                        "UserName": user_name,
+                        "UserEmail": user_email,
+                        "AccountBalance": str(balance),
+                        "Metadata": metadata,
+                        "IsActive": is_active,
+                        "BinarySignature": sig_b64,
+                    },
+                    "before": None,
+                })
+              else:
+                upsert_rows.append([user_id, user_name])
+                batch_audit.append({
+                    "client_tx_id": str(uuid.uuid4()),
+                    "op": "INSERT",
+                    "table": table,
+                    "user_id": user_id,
+                    "placement_key": None,
+                    "user_name": user_name,
+                    "user_email": None,
+                    "account_balance": None,
+                    "metadata": None,
+                    "is_active": None,
+                    "binary_signature": None,
+                    "commit_ts": None,
+                    "after": {"UserId": user_id, "UserName": user_name},
+                    "before": None,
+                })
+              b_ins += 1
+
+            elif op_choice == "UPDATE":
+              user_id = random.choice(available_for_update)
+              batch_used_ids.add(user_id)
+              user_name = f"User_{user_id}_UPD_{random.randint(100, 999)}"
+              if has_placement:
+                placement_key = random.choice(available_placements)
+                user_email = f"user_{user_id}_upd@example.com"
+                balance = Decimal(
+                    f"{random.randint(100, 50000)}.{random.randint(10, 99)}"
+                )
+                meta_dict = {
+                    "role": random.choice(["admin", "member", "guest"]),
+                    "tier": random.choice(["gold", "platinum"]),
+                    "pref_id": random.randint(101, 200),
+                }
+                metadata = json.dumps(meta_dict)
+                is_active = random.choice([True, False])
+                sig_raw = os.urandom(8)
+                sig_bytes = base64.b64encode(sig_raw)
+                sig_b64 = sig_bytes.decode("ascii")
+
+                upsert_rows.append([
+                    user_id,
+                    placement_key,
+                    user_name,
+                    user_email,
+                    balance,
+                    metadata,
+                    spanner.COMMIT_TIMESTAMP,
+                    is_active,
+                    sig_bytes,
+                ])
+                batch_audit.append({
+                    "client_tx_id": str(uuid.uuid4()),
+                    "op": "UPDATE",
+                    "table": table,
+                    "user_id": user_id,
+                    "placement_key": placement_key,
+                    "user_name": user_name,
+                    "user_email": user_email,
+                    "account_balance": str(balance),
+                    "metadata": metadata,
+                    "is_active": is_active,
+                    "binary_signature": sig_b64,
+                    "commit_ts": None,
+                    "after": {
+                        "UserId": user_id,
+                        "PlacementKey": placement_key,
+                        "UserName": user_name,
+                        "UserEmail": user_email,
+                        "AccountBalance": str(balance),
+                        "Metadata": metadata,
+                        "IsActive": is_active,
+                        "BinarySignature": sig_b64,
+                    },
+                    "before": None,
+                })
+              elif is_rich:
+                user_email = f"user_{user_id}_upd@example.com"
+                balance = Decimal(
+                    f"{random.randint(100, 50000)}.{random.randint(10, 99)}"
+                )
+                meta_dict = {
+                    "role": random.choice(["admin", "member", "guest"]),
+                    "tier": random.choice(["gold", "platinum"]),
+                    "pref_id": random.randint(101, 200),
+                }
+                metadata = json.dumps(meta_dict)
+                is_active = random.choice([True, False])
+                sig_raw = os.urandom(8)
+                sig_bytes = base64.b64encode(sig_raw)
+                sig_b64 = sig_bytes.decode("ascii")
+
+                upsert_rows.append([
+                    user_id,
+                    user_name,
+                    user_email,
+                    balance,
+                    metadata,
+                    spanner.COMMIT_TIMESTAMP,
+                    is_active,
+                    sig_bytes,
+                ])
+                batch_audit.append({
+                    "client_tx_id": str(uuid.uuid4()),
+                    "op": "UPDATE",
+                    "table": table,
+                    "user_id": user_id,
+                    "placement_key": None,
+                    "user_name": user_name,
+                    "user_email": user_email,
+                    "account_balance": str(balance),
+                    "metadata": metadata,
+                    "is_active": is_active,
+                    "binary_signature": sig_b64,
+                    "commit_ts": None,
+                    "after": {
+                        "UserId": user_id,
+                        "PlacementKey": None,
+                        "UserName": user_name,
+                        "UserEmail": user_email,
+                        "AccountBalance": str(balance),
+                        "Metadata": metadata,
+                        "IsActive": is_active,
+                        "BinarySignature": sig_b64,
+                    },
+                    "before": None,
+                })
+              else:
+                upsert_rows.append([user_id, user_name])
+                batch_audit.append({
+                    "client_tx_id": str(uuid.uuid4()),
+                    "op": "UPDATE",
+                    "table": table,
+                    "user_id": user_id,
+                    "placement_key": None,
+                    "user_name": user_name,
+                    "user_email": None,
+                    "account_balance": None,
+                    "metadata": None,
+                    "is_active": None,
+                    "binary_signature": None,
+                    "commit_ts": None,
+                    "after": {"UserId": user_id, "UserName": user_name},
+                    "before": None,
+                })
+              b_upd += 1
+
+            elif op_choice == "DELETE":
+              user_id = random.choice(available_for_update)
+              active_ids.remove(user_id)
+              batch_used_ids.add(user_id)
+              delete_keys.append([user_id])
+              batch_audit.append({
+                  "client_tx_id": str(uuid.uuid4()),
+                  "op": "DELETE",
+                  "table": table,
+                  "user_id": user_id,
+                  "placement_key": None,
+                  "user_name": None,
+                  "user_email": None,
+                  "account_balance": None,
+                  "metadata": None,
+                  "is_active": None,
+                  "binary_signature": None,
+                  "commit_ts": None,
+                  "after": None,
+                  "before": None,
+              })
+              b_del += 1
+
+          try:
+            with spanner_db.batch() as batch:
+              if upsert_rows:
+                batch.insert_or_update(
+                    table=table, columns=cols, values=upsert_rows
+                )
+              if delete_keys:
+                batch.delete(
+                    table=table, keyset=spanner.KeySet(keys=delete_keys)
+                )
+            commit_ts = batch.committed.isoformat()
+            active_ids.extend(new_batch_ids)
+            for entry in batch_audit:
+              entry["commit_ts"] = commit_ts
+            audit_buffer.record_entries(batch_audit)
+            succ_inserts += b_ins
+            succ_updates += b_upd
+            succ_deletes += b_del
+            remaining_ops -= current_batch_size
+          except Exception as e:
+            err_count += 1
+            if err_count <= 5:
+              print(f"Worker {worker_id} batch error: {e}")
+            time.sleep(0.5)
+
+      ops_per_thread = total_operations // threads
+      with concurrent.futures.ThreadPoolExecutor(
+          max_workers=threads
+      ) as executor:
+        futures = [
+            executor.submit(worker_task_batch, t, ops_per_thread)
+            for t in range(threads)
+        ]
+        concurrent.futures.wait(futures)
+
+      audit_buffer.flush()
+      elapsed = time.time() - start_time
+      total_succ = succ_inserts + succ_updates + succ_deletes
+      qps = total_succ / elapsed if elapsed > 0 else 0
+
+      print("\n" + "=" * 70)
+      print("Workload Summary:")
+      print(f"  Total Committed Operations : {total_succ:,}")
+      print(f"    - INSERTs                : {succ_inserts:,}")
+      print(f"    - UPDATEs                : {succ_updates:,}")
+      print(f"    - DELETEs                : {succ_deletes:,}")
+      print(f"  Total Failed Operations    : {err_count:,}")
+      print(f"  Elapsed Time               : {elapsed:.2f} s")
+      print(f"  Throughput                 : {qps:.1f} ops/sec")
+      print(
+          f"  Audit Log Dest             : gs://{bucket}/{run_id}/gcsb_audit/"
+      )
+      print("=" * 70)
+      return
+    except Exception as e:
+      print(
+          f"Notice: Python Spanner SDK execution failed ({e}), falling back to"
+          " CLI execution."
+      )
 
   def worker_task(worker_id: int, ops_per_worker: int):
     nonlocal succ_inserts, succ_updates, succ_deletes, err_count
