@@ -145,7 +145,8 @@ public class SynchronizationTaskContext {
                 connectorConfig.rebalancingTaskWaitingTimeout(), rebalancingConsumerFactory, this::onError);
 
         this.taskStateChangeEventHandler = new TaskStateChangeEventHandler(taskSyncContextHolder, taskSyncPublisher,
-                changeStream, partitionFactory, spannerEventDispatcher, this::onFinish, connectorConfig, this::onError);
+                changeStream, partitionFactory, spannerEventDispatcher, this::onFinish, connectorConfig, this::onError,
+                partitionOffsetProvider);
 
         this.rebalanceHandler = new RebalanceHandler(taskSyncContextHolder, taskSyncPublisher,
                 leaderAction, lowWatermarkStampPublisher);

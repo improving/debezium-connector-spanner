@@ -49,7 +49,8 @@ class TaskStateChangeEventHandlerTest {
                 },
                 mock(io.debezium.connector.spanner.SpannerConnectorConfig.class),
                 ex -> {
-                });
+                },
+                null);
 
         Timestamp ts = Timestamp.ofTimeMicroseconds(123L);
         MoveOutNotificationEvent event = new MoveOutNotificationEvent("partitionA", ts, List.of("destB"));
@@ -74,7 +75,8 @@ class TaskStateChangeEventHandlerTest {
                 },
                 mock(io.debezium.connector.spanner.SpannerConnectorConfig.class),
                 ex -> {
-                });
+                },
+                null);
 
         io.debezium.connector.spanner.task.state.TaskStateChangeEvent unknownEvent = new io.debezium.connector.spanner.task.state.TaskStateChangeEvent() {
         };
@@ -131,7 +133,8 @@ class TaskStateChangeEventHandlerTest {
                 },
                 mock(io.debezium.connector.spanner.SpannerConnectorConfig.class),
                 ex -> {
-                });
+                },
+                null);
 
         MoveOutNotificationEvent event = new MoveOutNotificationEvent("src", moveTimestamp, List.of("dst"));
 

@@ -60,6 +60,7 @@ public class TaskStateChangeEventHandler {
     private final SpannerConnectorConfig connectorConfig;
     private final SpannerEventDispatcher spannerEventDispatcher;
     private final Consumer<RuntimeException> errorHandler;
+    private final PartitionOffsetProvider partitionOffsetProvider;
 
     private final AtomicLong failOverloadedTaskTimer = new AtomicLong(System.currentTimeMillis());
 
@@ -70,7 +71,8 @@ public class TaskStateChangeEventHandler {
                                        SpannerEventDispatcher spannerEventDispatcher,
                                        Runnable finishingHandler,
                                        SpannerConnectorConfig connectorConfig,
-                                       Consumer<RuntimeException> errorHandler) {
+                                       Consumer<RuntimeException> errorHandler,
+                                       PartitionOffsetProvider partitionOffsetProvider) {
         this.taskSyncContextHolder = taskSyncContextHolder;
         this.taskSyncPublisher = taskSyncPublisher;
         this.partitionFactory = partitionFactory;
@@ -79,6 +81,7 @@ public class TaskStateChangeEventHandler {
         this.connectorConfig = connectorConfig;
         this.errorHandler = errorHandler;
         this.spannerEventDispatcher = spannerEventDispatcher;
+        this.partitionOffsetProvider = partitionOffsetProvider;
     }
 
     public void processEvent(TaskStateChangeEvent syncEvent) throws InterruptedException {
@@ -118,7 +121,7 @@ public class TaskStateChangeEventHandler {
         performOperation(
                 new PartitionStatusUpdateOperation(event.getToken(), event.getState()),
                 new ClearSharedPartitionOperation(),
-                new FindPartitionForStreamingOperation(changeStream.isMutableKeyRange()),
+                new FindPartitionForStreamingOperation(changeStream.isMutableKeyRange(), partitionOffsetProvider),
                 new TakePartitionForStreamingOperation(changeStream, partitionFactory));
     }
 
@@ -126,7 +129,7 @@ public class TaskStateChangeEventHandler {
         performOperation(
                 new ChildPartitionOperation(newPartitionsEvent.getPartitions()),
                 new ClearSharedPartitionOperation(),
-                new FindPartitionForStreamingOperation(changeStream.isMutableKeyRange()),
+                new FindPartitionForStreamingOperation(changeStream.isMutableKeyRange(), partitionOffsetProvider),
                 new TakePartitionForStreamingOperation(changeStream, partitionFactory),
                 new RemoveFinishedPartitionOperation(spannerEventDispatcher, connectorConfig));
     }
@@ -135,7 +138,7 @@ public class TaskStateChangeEventHandler {
         performOperation(
                 new MoveOutStateUpdateOperation(
                         event.getToken(), event.getCommitTimestamp(), event.getDestinationTokens()),
-                new FindPartitionForStreamingOperation(changeStream.isMutableKeyRange()),
+                new FindPartitionForStreamingOperation(changeStream.isMutableKeyRange(), partitionOffsetProvider),
                 new TakePartitionForStreamingOperation(changeStream, partitionFactory));
     }
 
@@ -143,7 +146,7 @@ public class TaskStateChangeEventHandler {
         performOperation(
                 new MoveInStateUpdateOperation(
                         event.getToken(), event.getCommitTimestamp(), event.getRecordSequence(), event.getSourcePartitionTokens()),
-                new FindPartitionForStreamingOperation(changeStream.isMutableKeyRange()),
+                new FindPartitionForStreamingOperation(changeStream.isMutableKeyRange(), partitionOffsetProvider),
                 new TakePartitionForStreamingOperation(changeStream, partitionFactory));
     }
 
@@ -156,7 +159,7 @@ public class TaskStateChangeEventHandler {
         TaskSyncContext taskSyncContext = performOperation(
                 new ClearSharedPartitionOperation(),
                 new TakeSharedPartitionOperation(),
-                new FindPartitionForStreamingOperation(changeStream.isMutableKeyRange()),
+                new FindPartitionForStreamingOperation(changeStream.isMutableKeyRange(), partitionOffsetProvider),
                 new TakePartitionForStreamingOperation(changeStream, partitionFactory),
                 new RemoveFinishedPartitionOperation(spannerEventDispatcher, connectorConfig),
                 new ConnectorEndDetectionOperation(finishingHandler, connectorConfig.endTime()));

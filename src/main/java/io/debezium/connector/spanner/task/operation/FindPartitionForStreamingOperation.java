@@ -7,6 +7,7 @@ package io.debezium.connector.spanner.task.operation;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -20,6 +21,7 @@ import io.debezium.connector.spanner.kafka.internal.model.MoveOutState;
 import io.debezium.connector.spanner.kafka.internal.model.PartitionState;
 import io.debezium.connector.spanner.kafka.internal.model.PartitionStateEnum;
 import io.debezium.connector.spanner.kafka.internal.model.TaskState;
+import io.debezium.connector.spanner.task.PartitionOffsetProvider;
 import io.debezium.connector.spanner.task.TaskSyncContext;
 
 /**
@@ -31,13 +33,20 @@ public class FindPartitionForStreamingOperation implements Operation {
 
     private boolean isRequiredPublishSyncEvent = false;
     private final boolean isMutableKeyRange;
+    private final PartitionOffsetProvider partitionOffsetProvider;
+    private Map<String, Timestamp> committedOffsets = Map.of();
 
     public FindPartitionForStreamingOperation() {
-        this(false);
+        this(false, null);
     }
 
     public FindPartitionForStreamingOperation(boolean isMutableKeyRange) {
+        this(isMutableKeyRange, null);
+    }
+
+    public FindPartitionForStreamingOperation(boolean isMutableKeyRange, PartitionOffsetProvider partitionOffsetProvider) {
         this.isMutableKeyRange = isMutableKeyRange;
+        this.partitionOffsetProvider = partitionOffsetProvider;
     }
 
     private TaskSyncContext takePartitionForStreaming(TaskSyncContext taskSyncContext) {
@@ -51,12 +60,13 @@ public class FindPartitionForStreamingOperation implements Operation {
                         LOGGER.debug("Task sees partition with CREATED state, task Uid {}, partition {}", taskSyncContext.getTaskUid(), partitionState);
                         if (partitionState.getMoveInState() != null) {
                             if (canDestPartitionContinue(taskSyncContext, partitionState, finishedPartitions)) {
-                                LOGGER.info("Task takes MoveIn partition for streaming, source(s) processed MoveOut, taskUid: {}, partition {}",
+                                LOGGER.info("Task takes MoveIn partition for streaming, source(s) committed past MoveIn, taskUid: {}, partition {}",
                                         taskSyncContext.getTaskUid(), partitionState.getToken());
                                 takePartitionForStreaming = true;
                             }
                             else {
-                                LOGGER.info("Task not taking MoveIn partition for streaming, waiting for source(s) MoveOut, taskUid: {}, partition {}, sources {}",
+                                LOGGER.info(
+                                        "Task not taking MoveIn partition for streaming, waiting for source(s) to commit past MoveIn, taskUid: {}, partition {}, sources {}",
                                         taskSyncContext.getTaskUid(), partitionState.getToken(), partitionState.getParents());
                             }
                         }
@@ -113,31 +123,26 @@ public class FindPartitionForStreamingOperation implements Operation {
     /**
      * Determines whether a destination partition that is paused after processing a MoveIn
      * event can resume streaming. This requires that every source partition referenced in the
-     * destination's {@link MoveInState} has published a {@link MoveOutState} that is at or past
-     * the MoveIn commit timestamp, and, if exactly at that timestamp, includes this destination
-     * partition among its recorded destinations.
+     * destination's {@link MoveInState} has committed all data up to the MoveIn commit timestamp.
      *
-     * <p>Source partitions that have reached {@code FINISHED}/{@code REMOVED} are purged from
-     * the task state (see {@link RemoveFinishedPartitionOperation}) and so no longer carry their
-     * {@link MoveOutState}. A source can only reach that state after streaming past every
-     * boundary in its key range, including any MoveOut it is a party to, so a source found in
-     * {@code finishedPartitions} is treated as having already satisfied this destination's wait
-     * condition, rather than deadlocking forever waiting on a purged {@link MoveOutState}.
+     * <p>A source can prove this in two ways:
+     * <ol>
+     *   <li>It has published a {@link MoveOutState} at or past the MoveIn timestamp that includes
+     *       this destination, and its Kafka-committed offset is strictly past the MoveIn timestamp.
+     *   <li>The source partition has reached {@code FINISHED}/{@code REMOVED}, which means it has
+     *       already streamed past every boundary in its key range.
+     *   <li>As a crash-recovery fallback, if no {@link MoveOutState} is present, the destination can
+     *       also resume once the source's Kafka-committed offset is strictly past the MoveIn
+     *       timestamp. This covers the case where a task crashed after committing past a boundary but
+     *       before the corresponding {@code MoveOutStateUpdateOperation} was persisted to the sync
+     *       topic.
+     * </ol>
      *
-     * <p>A source can also be missing a matching {@link MoveOutState} entry because a task
-     * crashed after the source's own change stream query had already read past the MoveIn commit
-     * timestamp, but before the resulting {@code MoveOutStateUpdateOperation} update was
-     * persisted to the sync topic. On restart, the source resumes from its persisted offset -
-     * which is already past that timestamp - so it will never re-read (and therefore never
-     * re-emit) that boundary record again. If the source's own {@code processedTimestamp} is
-     * already strictly past the MoveIn timestamp, its change stream has necessarily already read
-     * through that boundary for real (Spanner change streams deliver records in
-     * commit-timestamp order), so it is safe to treat the MoveOut as satisfied despite the
-     * missing local bookkeeping. This fallback is checked whenever no entry proves the move is
-     * satisfied - not only when {@code moveOutStates} is completely empty - since a source can
-     * accumulate several independent MoveOut entries over its life (see
-     * {@code MoveOutStateUpdateOperation}) and an older, unrelated entry must never mask the loss
-     * of a different, later one.
+     * <p>Strictly greater-than is required because Kafka offsets for this connector are Spanner
+     * commit timestamps. At the exact MoveIn timestamp there may be multiple records (for example a
+     * heartbeat and a data change, or several data changes in the same transaction); a committed
+     * offset equal to the MoveIn timestamp does not guarantee that every record at that timestamp
+     * has been durably committed.
      */
     private boolean canDestPartitionContinue(TaskSyncContext taskSyncContext, PartitionState destPartition, Set<String> finishedPartitions) {
         MoveInState moveInState = destPartition.getMoveInState();
@@ -160,12 +165,18 @@ public class FindPartitionForStreamingOperation implements Operation {
                     return cmp > 0 || (cmp == 0 && moveOutState.getDestPartitionTokens().contains(destToken));
                 });
         if (satisfiedByMoveOutState) {
-            return true;
+            if (partitionOffsetProvider == null) {
+                return true;
+            }
+            return isSourceCommittedPast(taskSyncContext, sourceToken, moveInTimestamp, destToken);
         }
         if (finishedPartitions.contains(sourceToken)) {
             LOGGER.info("Task {}, source partition {} already finished and purged, treating MoveOut as satisfied for destination {}",
                     taskSyncContext.getTaskUid(), sourceToken, destToken);
             return true;
+        }
+        if (partitionOffsetProvider != null) {
+            return isSourceCommittedPast(taskSyncContext, sourceToken, moveInTimestamp, destToken);
         }
         PartitionState sourceState = findPartitionState(taskSyncContext, sourceToken);
         if (sourceState != null && sourceState.getProcessedTimestamp() != null
@@ -177,6 +188,39 @@ public class FindPartitionForStreamingOperation implements Operation {
             return true;
         }
         return false;
+    }
+
+    private boolean isSourceCommittedPast(TaskSyncContext taskSyncContext, String sourceToken, Timestamp moveInTimestamp, String destToken) {
+        Timestamp committedOffset = committedOffsets.get(sourceToken);
+        if (committedOffset == null) {
+            LOGGER.info("Task {}, source partition {} has no committed offset yet, not resuming destination {} for MoveIn at {}",
+                    taskSyncContext.getTaskUid(), sourceToken, destToken, moveInTimestamp);
+            return false;
+        }
+        if (committedOffset.compareTo(moveInTimestamp) > 0) {
+            LOGGER.info("Task {}, source partition {} committed offset {} is past MoveIn timestamp {}, resuming destination {}",
+                    taskSyncContext.getTaskUid(), sourceToken, committedOffset, moveInTimestamp, destToken);
+            return true;
+        }
+        LOGGER.info("Task {}, source partition {} committed offset {} is not past MoveIn timestamp {}, waiting",
+                taskSyncContext.getTaskUid(), sourceToken, committedOffset, moveInTimestamp);
+        return false;
+    }
+
+    private Map<String, Timestamp> loadCommittedOffsets(TaskSyncContext taskSyncContext) {
+        if (partitionOffsetProvider == null) {
+            return Map.of();
+        }
+        Set<String> sourceTokens = taskSyncContext.getCurrentTaskState().getPartitions().stream()
+                .filter(partitionState -> PartitionStateEnum.CREATED.equals(partitionState.getState()))
+                .filter(partitionState -> partitionState.getMoveInState() != null)
+                .flatMap(partitionState -> partitionState.getMoveInState().getSourcePartitionTokens().stream())
+                .collect(Collectors.toSet());
+        if (sourceTokens.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, Timestamp> offsets = partitionOffsetProvider.getOffsets(sourceTokens);
+        return offsets == null ? Map.of() : offsets;
     }
 
     private List<MoveOutState> findMoveOutStates(TaskSyncContext taskSyncContext, String token) {
@@ -239,6 +283,7 @@ public class FindPartitionForStreamingOperation implements Operation {
 
     @Override
     public TaskSyncContext doOperation(TaskSyncContext taskSyncContext) {
+        this.committedOffsets = loadCommittedOffsets(taskSyncContext);
         return takePartitionForStreaming(taskSyncContext);
     }
 }
