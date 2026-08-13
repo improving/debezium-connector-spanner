@@ -109,5 +109,7 @@ class SpannerSourceInfoStructMakerTest {
                 readAtTimestamp, "42", 1L, null, atStartOfDayResult3.atZone(ZoneId.of("UTC")).toInstant(), 1L,
                 "testTag=test", false, "UPDATE", "testToken", 0, false, 1L);
         assertThrows(IllegalStateException.class, () -> spannerSourceInfoStructMaker.struct(sourceInfo));
+        assertEquals(1L, sourceInfo.getRecordSequence());
+        assertNull(sourceInfo.getRecordSequencePrefix());
     }
 }
