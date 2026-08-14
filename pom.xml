@@ -454,6 +454,36 @@
                         <goals>
                             <goal>integration-test</goal>
                         </goals>
+                        <configuration>
+                            <excludes>
+                                <exclude>**/CrossPartitionSplitOrderingImmutableKeyRangeIT.java</exclude>
+                                <exclude>**/CrossPartitionSplitOrderingMutableKeyRangeIT.java</exclude>
+                            </excludes>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <!--
+                            CrossPartitionSplitOrdering{Immutable,Mutable}KeyRangeIT ride the
+                            Spanner emulator's own uncontrolled recursive-split schedule, and
+                            whichever of the two happens to run second in a shared JVM reliably
+                            fails with a dispatch-latency race (OUT_OF_RANGE) that a fresh JVM
+                            avoids - see CrossPartitionSplitOrderingTestBase's javadoc for the
+                            full explanation. Give them their own execution with
+                            reuseForks=false so each always gets a separate JVM.
+                        -->
+                        <id>integration-test-isolated-jvm</id>
+                        <goals>
+                            <goal>integration-test</goal>
+                        </goals>
+                        <configuration>
+                            <includes>
+                                <include>**/CrossPartitionSplitOrderingImmutableKeyRangeIT.java</include>
+                                <include>**/CrossPartitionSplitOrderingMutableKeyRangeIT.java</include>
+                            </includes>
+                            <reuseForks>false</reuseForks>
+                            <forkCount>2</forkCount>
+                            <argLine>-Dtest.forkNumber=${surefire.forkNumber}</argLine>
+                        </configuration>
                     </execution>
                     <execution>
                         <id>verify</id>

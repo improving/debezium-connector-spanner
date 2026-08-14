@@ -21,12 +21,15 @@ public class Database {
 
     private final String databaseId;
 
+    private final String instanceId;
+
     private Connection connection;
 
     private final Dialect dialect;
 
-    private Database(String databaseId, Dialect dialect) {
+    private Database(String databaseId, String instanceId, Dialect dialect) {
         this.databaseId = databaseId;
+        this.instanceId = instanceId;
         this.dialect = dialect;
     }
 
@@ -57,6 +60,9 @@ public class Database {
     public String getInstanceId() {
         if (isSpannerOmniEndpoint()) {
             return DatabaseClientFactory.SPANNER_OMNI_DEFAULT_ID;
+        }
+        if (instanceId != null) {
+            return instanceId;
         }
         return System.getProperty(INSTANCE_ID_PROPERTY, DEFAULT_INSTANCE_ID);
     }
@@ -106,6 +112,8 @@ public class Database {
     public static class Builder {
         private String databaseId;
 
+        private String instanceId;
+
         private Dialect dialect = Dialect.GOOGLE_STANDARD_SQL;
 
         public Builder dialect(Dialect dialect) {
@@ -125,8 +133,15 @@ public class Database {
             return this;
         }
 
+        public Builder generateInstanceId() {
+            String uuid = UUID.randomUUID().toString().replace("-", "")
+                    .substring(0, 8);
+            this.instanceId = "int-tests-instance-" + uuid;
+            return this;
+        }
+
         public Database build() {
-            return new Database(databaseId, dialect);
+            return new Database(databaseId, instanceId, dialect);
         }
     }
 }

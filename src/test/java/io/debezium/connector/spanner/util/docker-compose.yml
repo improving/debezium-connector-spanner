@@ -5,15 +5,18 @@ services:
     hostname: broker
     ports:
       # See https://rmoff.net/2018/08/02/kafka-listeners-explained/ for details
-      - "9092:9092"
-      - "9101:9101"
+      # Host-side ports are overridable (KAFKA_HOST_PORT/KAFKA_JMX_HOST_PORT) so that multiple
+      # Surefire/Failsafe forks can each run their own broker without colliding on a fixed port -
+      # see KafkaEnvironment.java.
+      - "${KAFKA_HOST_PORT:-9092}:9092"
+      - "${KAFKA_JMX_HOST_PORT:-9101}:9101"
     environment:
       CLUSTER_ID: oh-sxaDRTcyAr6pFRbXyzA
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_CONTROLLER_QUORUM_BOOTSTRAP_SERVERS: broker:9093
       KAFKA_LISTENERS: PLAINTEXT://broker:9092,CONTROLLER://broker:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:${KAFKA_HOST_PORT:-9092}
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,CONTROLLER:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER

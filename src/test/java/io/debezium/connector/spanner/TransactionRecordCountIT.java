@@ -14,7 +14,6 @@ import java.util.concurrent.TimeUnit;
 
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.source.SourceRecord;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
@@ -29,14 +28,6 @@ import io.debezium.connector.spanner.util.PartitionMode;
  * <p>This test is {@link RealSpannerCompatible}: when {@code -Dspanner.test.real=true} is
  * passed it runs against a real Cloud Spanner instance; otherwise it runs against the local
  * emulator.
- *
- * <p>{@code MUTABLE_KEY_RANGE} self-skips unless running against real Spanner: connector
- * startup plus this test's DML can incidentally span the local emulator's ~15-20 second
- * background partition split, and a newly split {@code MUTABLE_KEY_RANGE} child partition
- * isn't picked up for streaming quickly enough - Spanner rejects the query with
- * {@code OUT_OF_RANGE: Specified start_timestamp is too far in the past}. Same root cause as
- * the one documented on {@link CrossPartitionSplitOrderingIT}; real Spanner splits based on
- * load rather than a fixed timer, so it isn't expected to hit this.
  */
 @RealSpannerCompatible
 public class TransactionRecordCountIT extends AbstractSpannerConnectorIT {
@@ -58,11 +49,6 @@ public class TransactionRecordCountIT extends AbstractSpannerConnectorIT {
     @ParameterizedTest
     @EnumSource(PartitionMode.class)
     public void shouldReportRecordAndPartitionCountsForTransaction(PartitionMode partitionMode) throws InterruptedException, ExecutionException {
-        Assumptions.assumeTrue(partitionMode != PartitionMode.MUTABLE_KEY_RANGE || Connection.isRealSpanner(),
-                "Skipping: this test incidentally spans the emulator's background partition split, and the "
-                        + "connector doesn't pick up the new MUTABLE_KEY_RANGE child partition for streaming "
-                        + "quickly enough - Spanner rejects the query with OUT_OF_RANGE: Specified start_timestamp "
-                        + "is too far in the past. Run with -Dspanner.test.real=true to exercise this mode.");
         String tableName = tableNamePrefix + "_" + partitionMode.name().toLowerCase();
         String changeStreamName = changeStreamNamePrefix + partitionMode.name();
         databaseConnection.createTable(tableName + "(id INT64, value STRING(100)) PRIMARY KEY (id)");

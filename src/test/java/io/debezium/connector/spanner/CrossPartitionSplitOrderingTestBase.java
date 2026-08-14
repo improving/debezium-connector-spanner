@@ -14,11 +14,10 @@ import java.util.concurrent.TimeUnit;
 
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.source.SourceRecord;
-import org.junit.jupiter.api.Assumptions;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
 
 import io.debezium.config.Configuration;
+import io.debezium.connector.spanner.util.Connection;
+import io.debezium.connector.spanner.util.Database;
 import io.debezium.connector.spanner.util.PartitionMode;
 
 /**
@@ -37,47 +36,53 @@ import io.debezium.connector.spanner.util.PartitionMode;
  * recursive splitting happening underneath does not cause reordering, drops, or duplicate
  * delivery.
  *
- * <p>Parameterized across both partition modes, but {@code MUTABLE_KEY_RANGE} currently
- * self-skips: after a background split, the connector doesn't pick up the new child
- * partition for streaming quickly enough, and Spanner rejects the query with
- * {@code OUT_OF_RANGE: Specified start_timestamp is too far in the past} - a real dispatch-latency
- * gap specific to {@code MUTABLE_KEY_RANGE} (its move-ordering machinery is the leading
- * suspect), not a test issue. {@code IMMUTABLE_KEY_RANGE} uses the same generic
- * split-handling code with no such delay.
+ * <p>A new child partition's dispatch can fall behind the change stream's live low-watermark
+ * (which advances with wall-clock progress, not a retention window) by more than its ~15-20
+ * second margin, in which case Spanner rejects the query with {@code OUT_OF_RANGE: Specified
+ * start_timestamp is too far in the past}. This isn't specific to either partition mode,
+ * but whichever mode runs second in a shared JVM is more exposed to it, for reasons not fully
+ * diagnosed (no specific shared JVM state has been identified as the cause). That's why this
+ * lives as two top-level test classes ({@link CrossPartitionSplitOrderingImmutableKeyRangeIT}
+ * and {@link CrossPartitionSplitOrderingMutableKeyRangeIT}), each with its own {@code @Test}
+ * method calling {@link #runTest}, run through the {@code integration-test-isolated-jvm}
+ * Failsafe execution in {@code pom.xml} that gives each class its own {@code reuseForks=false}
+ * JVM fork. {@code KafkaEnvironment} assigns each fork its own Kafka broker port
+ * ({@code KafkaEnvironment.perForkPort}) so the two forks' Docker containers don't collide.
  */
-public class CrossPartitionSplitOrderingIT extends AbstractSpannerConnectorIT {
+public abstract class CrossPartitionSplitOrderingTestBase extends AbstractSpannerConnectorIT {
 
     private static final String tableNamePrefix = "cross_partition_split_ordering_table";
     private static final String changeStreamNamePrefix = "crossPartitionSplitOrderingStream";
 
-    @ParameterizedTest
-    @EnumSource(PartitionMode.class)
-    public void shouldDeliverFollowUpWriteExactlyOnceAndInOrderAcrossBackgroundPartitionSplits(PartitionMode partitionMode)
+    protected void runTest(PartitionMode partitionMode)
             throws InterruptedException, ExecutionException {
-        Assumptions.assumeTrue(partitionMode != PartitionMode.MUTABLE_KEY_RANGE,
-                "Skipping: after a background split, the connector doesn't pick up the new MUTABLE_KEY_RANGE "
-                        + "child partition for streaming quickly enough, and Spanner rejects the query with "
-                        + "OUT_OF_RANGE: Specified start_timestamp is too far in the past - a dispatch-latency gap, "
-                        + "not something this test can work around.");
         String tableName = tableNamePrefix + "_" + partitionMode.name().toLowerCase();
         String changeStreamName = changeStreamNamePrefix + partitionMode.name();
-        databaseConnection.createTable(tableName + "(id INT64, value STRING(100)) PRIMARY KEY (id)");
-        databaseConnection.createChangeStream(changeStreamName, partitionMode, tableName);
+
+        // A fresh emulator instance and database per invocation: the two invocations run
+        // in separate, often concurrent, JVM forks (see pom.xml), so sharing the default
+        // instance/database would risk concurrent DDL/instance-creation conflicts between them.
+        Database testDatabase = Database.builder().generateInstanceId().generateDatabaseId().build();
+        Connection connection = testDatabase.getConnection();
+
+        connection.createTable(tableName + "(id INT64, value STRING(100)) PRIMARY KEY (id)");
+        connection.createChangeStream(changeStreamName, partitionMode, tableName);
         try {
-            final Configuration config = buildTestConfig(baseConfig, changeStreamName, tableName, partitionMode);
+            final Configuration config = buildTestConfig(createBaseConfigBuilder(testDatabase, false).build(),
+                    changeStreamName, tableName, partitionMode);
 
             initializeConnectorTestFramework();
             start(SpannerConnector.class, config);
             assertConnectorIsRunning();
 
-            databaseConnection.executeUpdate(
+            connection.executeUpdate(
                     "INSERT INTO " + tableName + "(id, value) VALUES (1, 'v1')");
 
             // Long enough to guarantee multiple recursive splits have already happened
             // underneath by the time the follow-up write below lands.
             Thread.sleep(TimeUnit.SECONDS.toMillis(45));
 
-            databaseConnection.executeUpdate(
+            connection.executeUpdate(
                     "UPDATE " + tableName + " SET value = 'v2' WHERE id = 1");
 
             assertTrue(waitForAvailableRecords(waitTimeForRecords(), TimeUnit.SECONDS));
@@ -109,8 +114,9 @@ public class CrossPartitionSplitOrderingIT extends AbstractSpannerConnectorIT {
         }
         finally {
             stopConnector();
-            databaseConnection.dropChangeStream(changeStreamName);
-            databaseConnection.dropTable(tableName);
+            connection.dropDatabase(testDatabase.getDatabaseId());
+            connection.dropInstance(testDatabase.getInstanceId());
+            connection.close();
         }
     }
 }

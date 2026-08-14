@@ -24,6 +24,7 @@ public class KafkaEnvironment {
 
     private static final String KAFKA_BROKER_SERVICE_NAME = "broker";
     private static final int KAFKA_BROKER_SERVICE_API_PORT = 9092;
+    private static final int KAFKA_JMX_API_PORT = 9101;
 
     public static final Duration STARTUP_TIMEOUT = Duration.ofSeconds(200L);
     public static final Duration STARTUP_CONNECTOR_TIMEOUT = Duration.ofSeconds(600L);
@@ -37,13 +38,43 @@ public class KafkaEnvironment {
 
     private KafkaBrokerApi<ObjectNode, ObjectNode> brokerApiOn;
 
+    private final int brokerHostPort;
+
     public KafkaEnvironment(String dockerComposeFilePath) {
         Testing.Print.enable();
         Testing.print("Initializing kafka environment for IT test...");
+        this.brokerHostPort = perForkPort(KAFKA_BROKER_SERVICE_API_PORT);
+        int jmxHostPort = perForkPort(KAFKA_JMX_API_PORT);
         this.composeContainer = new ComposeContainer(new File(dockerComposeFilePath))
+                .withEnv("KAFKA_HOST_PORT", String.valueOf(brokerHostPort))
+                .withEnv("KAFKA_JMX_HOST_PORT", String.valueOf(jmxHostPort))
                 .withExposedService(KAFKA_BROKER_SERVICE_NAME, KAFKA_BROKER_SERVICE_API_PORT,
                         Wait.forListeningPort().withStartupTimeout(STARTUP_TIMEOUT));
         Testing.print("Finished initializing kafka environment.");
+    }
+
+    /**
+     * Offsets {@code basePort} by the {@code test.forkNumber} system property, so that a build
+     * running multiple forks with {@code reuseForks=false} gives each one its own Kafka broker
+     * port instead of racing to bind the same fixed port. {@code test.forkNumber} isn't set
+     * automatically - Surefire/Failsafe's {@code ${surefire.forkNumber}} is only a text-
+     * substitution token usable inside plugin config elements like {@code argLine}, not a real
+     * JVM system property, so the execution that wants per-fork ports must pass it through
+     * explicitly, e.g. {@code <argLine>-Dtest.forkNumber=${surefire.forkNumber}</argLine>}. Falls
+     * back to {@code basePort} unchanged when the property is absent (the common case: a single,
+     * non-forked test run that never sets it).
+     */
+    private static int perForkPort(int basePort) {
+        String forkNumberProperty = System.getProperty("test.forkNumber");
+        if (forkNumberProperty == null) {
+            return basePort;
+        }
+        try {
+            return basePort + Integer.parseInt(forkNumberProperty);
+        }
+        catch (NumberFormatException e) {
+            return basePort;
+        }
     }
 
     public void start() {
@@ -54,7 +85,7 @@ public class KafkaEnvironment {
                 .getContainerByServiceName(KAFKA_BROKER_SERVICE_NAME)
                 .orElseThrow();
 
-        this.brokerApiOn = KafkaBrokerApi.createKafkaBrokerApiObjectNode(brokerState, KAFKA_BROKER_SERVICE_API_PORT);
+        this.brokerApiOn = KafkaBrokerApi.createKafkaBrokerApiObjectNode(brokerState, brokerHostPort);
     }
 
     public KafkaBrokerApi<ObjectNode, ObjectNode> kafkaBrokerApiOn() {

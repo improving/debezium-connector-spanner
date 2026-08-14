@@ -472,6 +472,15 @@ public class Connection {
         LOG.info("{} database has been dropped", databaseId);
     }
 
+    public void dropInstance(String instanceId) {
+        this.spanner.getInstanceAdminClient().deleteInstance(instanceId);
+        LOG.info("{} instance has been dropped", instanceId);
+    }
+
+    public void close() {
+        this.spanner.close();
+    }
+
     public void createDatabase(String databaseId, Dialect dialect) throws InterruptedException {
         if (!isSpannerOmniEndpoint() && !realSpanner) {
             createInstance();

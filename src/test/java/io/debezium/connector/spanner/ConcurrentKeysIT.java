@@ -17,7 +17,7 @@ import java.util.concurrent.TimeUnit;
 
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.source.SourceRecord;
-import org.junit.jupiter.api.Disabled;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
@@ -31,17 +31,6 @@ import io.debezium.connector.spanner.util.PartitionMode;
  * <p>This test is {@link RealSpannerCompatible}: when {@code -Dspanner.test.real=true} is
  * passed it runs against a real Cloud Spanner instance; otherwise it runs against the local
  * emulator.
- *
- * <p>{@code MUTABLE_KEY_RANGE} can't run against the emulator: this test runs long enough
- * (connector startup, task rebalancing, eight DML statements) to incidentally span the local
- * emulator's ~15-20 second background partition split, and a newly split
- * {@code MUTABLE_KEY_RANGE} child partition isn't picked up for streaming quickly enough -
- * Spanner rejects the query with
- * {@code OUT_OF_RANGE: Specified start_timestamp is too far in the past}. Same root cause as
- * the one documented on {@link CrossPartitionSplitOrderingIT}; real Spanner splits based on
- * load rather than a fixed timer, so it isn't expected to hit this.
- *
- * <p>The whole method is currently {@code @Disabled} regardless of backend - see its Javadoc.
  */
 @RealSpannerCompatible
 public class ConcurrentKeysIT extends AbstractSpannerConnectorIT {
@@ -75,24 +64,19 @@ public class ConcurrentKeysIT extends AbstractSpannerConnectorIT {
     private static final String changeStreamNamePrefix = "embeddedConcurrentKeysStream";
 
     /**
-     * Disabled on both backends.
-     *
-     * <p>Emulator: {@code MUTABLE_KEY_RANGE} can't run here - a background partition split
-     * mid-test breaks streaming (see class Javadoc).
-     *
-     * <p>Real Spanner: UPDATE "before" images omit columns that weren't part of the
-     * {@code SET} clause, because Spanner's change-stream {@code old_values} only includes
-     * changed columns and the connector never backfills the rest. Confirmed on both partition
-     * modes.
-     *
-     * <p>Re-enable once that real-Spanner bug is fixed.
+     * Passes on the emulator, both partition modes. Self-skips against real Spanner: UPDATE
+     * "before" images omit columns that weren't part of the {@code SET} clause, because
+     * Spanner's change-stream {@code old_values} only includes changed columns and the
+     * connector never backfills the rest - see doc/change-stream-integration-tests.md Known
+     * Issues #1.
      */
-    @Disabled("Real-Spanner run: UPDATE 'before' images omit columns that weren't part of the "
-            + "SET clause, since the connector never backfills unchanged columns missing from "
-            + "Spanner's old_values. See Javadoc.")
     @ParameterizedTest
     @EnumSource(PartitionMode.class)
     public void shouldNotCrossContaminateStateBetweenInterleavedKeys(PartitionMode partitionMode) throws InterruptedException, ExecutionException {
+        Assumptions.assumeTrue(!Connection.isRealSpanner(),
+                "Skipping: on real Spanner, an UPDATE's payload omits columns that weren't part of its SET "
+                        + "clause, so an unchanged column comes back null instead of its real value. See "
+                        + "doc/change-stream-integration-tests.md Known Issues #1.");
         String tableName = tableNamePrefix + "_" + partitionMode.name().toLowerCase();
         String changeStreamName = changeStreamNamePrefix + partitionMode.name();
         databaseConnection.createTable(tableName
