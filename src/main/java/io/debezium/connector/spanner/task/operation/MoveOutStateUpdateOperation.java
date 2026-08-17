@@ -6,6 +6,7 @@
 package io.debezium.connector.spanner.task.operation;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -105,7 +106,7 @@ public class MoveOutStateUpdateOperation implements Operation {
         return latestByDest.entrySet().stream()
                 .collect(Collectors.groupingBy(
                         Map.Entry::getValue,
-                        Collectors.mapping(Map.Entry::getKey, Collectors.toList())))
+                        Collectors.mapping(Map.Entry::getKey, Collectors.toCollection(HashSet::new))))
                 .entrySet().stream()
                 .sorted(Map.Entry.comparingByKey())
                 .map(e -> new MoveOutState(e.getKey(), e.getValue()))
