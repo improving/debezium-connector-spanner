@@ -6,6 +6,7 @@
 package io.debezium.connector.spanner.kafka.internal.model;
 
 import java.util.List;
+import java.util.Objects;
 
 import com.google.cloud.Timestamp;
 
@@ -31,6 +32,24 @@ public class MoveOutState {
 
     public List<String> getDestPartitionTokens() {
         return destPartitionTokens;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
+        MoveOutState that = (MoveOutState) o;
+        return Objects.equals(timestamp, that.timestamp) &&
+                Objects.equals(destPartitionTokens, that.destPartitionTokens);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(timestamp, destPartitionTokens);
     }
 
     @Override
