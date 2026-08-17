@@ -6,6 +6,8 @@
 package io.debezium.connector.spanner.db.dao;
 
 import java.util.Collection;
+import java.util.Collections;
+import java.util.List;
 import java.util.stream.Collectors;
 
 import com.google.cloud.Timestamp;
@@ -97,6 +99,34 @@ public class SchemaDao {
             }
         }
         return false;
+    }
+
+    public boolean isPerPlacementTvfChangeStream(String streamName) {
+        try (ReadOnlyTransaction tx = databaseClient.readOnlyTransaction()) {
+            ResultSet resultSet = readChangeStreamOptions(tx, streamName);
+
+            while (resultSet.next()) {
+                String optionName = resultSet.getString(0);
+                if ("per_placement_tvf".equalsIgnoreCase(optionName)) {
+                    String optionValue = resultSet.getString(1);
+                    return Boolean.parseBoolean(optionValue);
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Returns the names of the per-placement read table-valued functions (e.g.
+     * {@code READ_Foo_US}, {@code READ_Foo_EU}) that must be queried and unioned for a change
+     * stream created with {@code per_placement_tvf = true}.
+     *
+     * TODO: implement placement discovery once the information_schema shape exposing a change
+     * stream's placements is confirmed. Returns an empty list for now, which callers should
+     * treat as "no per-placement TVFs, fall back to the regular READ_<streamName> function".
+     */
+    public List<String> getPlacementTvfNames(String streamName) {
+        return Collections.emptyList();
     }
 
     private ResultSet readColumnsInfo(ReadOnlyTransaction tx, Collection<String> tables) {

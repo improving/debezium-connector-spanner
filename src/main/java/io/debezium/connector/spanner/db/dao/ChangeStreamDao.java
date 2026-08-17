@@ -5,6 +5,8 @@
  */
 package io.debezium.connector.spanner.db.dao;
 
+import java.util.List;
+
 import com.google.cloud.Timestamp;
 import com.google.cloud.spanner.DatabaseClient;
 import com.google.cloud.spanner.Dialect;
@@ -25,11 +27,18 @@ public class ChangeStreamDao {
     private final RpcPriority rpcPriority;
     private final String jobName;
     private final boolean isMutableKeyRange;
+    private final List<String> placementTvfNames;
 
     public ChangeStreamDao(String changeStreamName, boolean isMutableKeyRange, DatabaseClient databaseClient,
                            RpcPriority rpcPriority, String jobName) {
+        this(changeStreamName, isMutableKeyRange, List.of(), databaseClient, rpcPriority, jobName);
+    }
+
+    public ChangeStreamDao(String changeStreamName, boolean isMutableKeyRange, List<String> placementTvfNames,
+                           DatabaseClient databaseClient, RpcPriority rpcPriority, String jobName) {
         this.changeStreamName = changeStreamName;
         this.isMutableKeyRange = isMutableKeyRange;
+        this.placementTvfNames = placementTvfNames;
         this.databaseClient = databaseClient;
         this.rpcPriority = rpcPriority;
         this.jobName = jobName;
@@ -37,8 +46,24 @@ public class ChangeStreamDao {
 
     public ChangeStreamResultSet streamQuery(String partitionToken, Timestamp startTimestamp, Timestamp endTimestamp,
                                              long heartbeatMillis) {
+        return streamQuery(partitionToken, null, startTimestamp, endTimestamp, heartbeatMillis);
+    }
+
+    /**
+     * Queries a single read table-valued function for change stream records.
+     *
+     * @param tvfName the placement-specific TVF to query (e.g. {@code READ_Foo_US}), or
+     *     {@code null}/blank to fall back to the change stream's default {@code READ_<streamName>}
+     *     function. Per {@code per_placement_tvf} change streams, callers are responsible for
+     *     querying every placement TVF (see {@link #getPlacementTvfNames()}) and remembering which
+     *     one produced a given partition, since each TVF has its own independent partition token
+     *     space; this method does not union them itself.
+     */
+    public ChangeStreamResultSet streamQuery(String partitionToken, String tvfName, Timestamp startTimestamp, Timestamp endTimestamp,
+                                             long heartbeatMillis) {
         // For the initial partition we query with a null partition token
         final String partitionTokenOrNull = InitialPartition.isInitialPartition(partitionToken) ? null : partitionToken;
+        final String resolvedTvfName = (tvfName == null || tvfName.isBlank()) ? "READ_" + changeStreamName : tvfName;
         String query;
         Statement statement;
         if (this.isPostgres()) {
@@ -63,8 +88,8 @@ public class ChangeStreamDao {
                     .build();
         }
         else {
-            query = "SELECT * FROM READ_"
-                    + changeStreamName
+            query = "SELECT * FROM "
+                    + resolvedTvfName
                     + "("
                     + "   start_timestamp => @startTimestamp,"
                     + "   end_timestamp => @endTimestamp,"
@@ -95,11 +120,19 @@ public class ChangeStreamDao {
         return this.databaseClient.getDialect() == Dialect.POSTGRESQL;
     }
 
+    public boolean isPerPlacementTvf() {
+        return !placementTvfNames.isEmpty();
+    }
+
     public String getChangeStreamName() {
         return changeStreamName;
     }
 
     public boolean isMutableKeyRange() {
         return isMutableKeyRange;
+    }
+
+    public List<String> getPlacementTvfNames() {
+        return placementTvfNames;
     }
 }

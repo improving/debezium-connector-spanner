@@ -5,6 +5,9 @@
  */
 package io.debezium.connector.spanner.db;
 
+import java.util.Collections;
+import java.util.List;
+
 import com.google.cloud.spanner.Options;
 
 import io.debezium.connector.spanner.db.dao.ChangeStreamDao;
@@ -34,7 +37,10 @@ public class DaoFactory {
                                         Options.RpcPriority rpcPriority, String jobName) {
         SchemaDao schemaDao = getSchemaDao();
         boolean isMutableKeyRange = schemaDao.isMutableKeyRangeChangeStream(changeStreamName);
-        return new ChangeStreamDao(changeStreamName, isMutableKeyRange, this.databaseClientFactory.getDatabaseClient(),
-                rpcPriority, jobName);
+        List<String> placementTvfNames = schemaDao.isPerPlacementTvfChangeStream(changeStreamName)
+                ? schemaDao.getPlacementTvfNames(changeStreamName)
+                : Collections.emptyList();
+        return new ChangeStreamDao(changeStreamName, isMutableKeyRange, placementTvfNames,
+                this.databaseClientFactory.getDatabaseClient(), rpcPriority, jobName);
     }
 }
