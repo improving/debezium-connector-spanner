@@ -17,6 +17,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -27,11 +29,14 @@ import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.google.cloud.spanner.Dialect;
 
 import io.debezium.config.Configuration;
 import io.debezium.connector.spanner.util.Connection;
+import io.debezium.connector.spanner.util.Database;
 import io.debezium.util.Testing;
 
 /**
@@ -82,6 +87,61 @@ public class MutableKeyRangeIT extends AbstractSpannerConnectorIT {
     protected static final Configuration basePgConfig = Connection.isRealSpanner()
             ? createBaseConfigBuilder(pgDatabase, true).build()
             : AbstractSpannerConnectorIT.basePgConfig;
+
+    private static final Logger LOG = LoggerFactory.getLogger(MutableKeyRangeIT.class);
+
+    /**
+     * The local Spanner emulator's PostgreSQL dialect support has an observed limitation where a
+     * dropped change stream doesn't immediately free its slot against the emulator's per-database
+     * cap of 10 concurrent change streams, so running this class's full dialect parameterization
+     * (which creates and drops a PostgreSQL change stream in nearly every test) against a single
+     * PostgreSQL-dialect database can hit that cap partway through the suite.
+     *
+     * <p>To keep full {@link Dialect} parameterization working reliably against the emulator, a
+     * fresh PostgreSQL-dialect database is transparently rotated in (via
+     * {@link #registerPgChangeStreamCreation()}) after every
+     * {@value #MAX_PG_CHANGE_STREAMS_PER_DATABASE} change streams created against the current one.
+     * {@code pgChangeStreamsCreatedOnCurrentDatabase} is an {@link AtomicInteger} and rotation is
+     * performed under a lock, so this is safe even if tests in this class were ever run
+     * concurrently (JUnit 5 parallel execution), not just sequentially as they run today.
+     */
+    private static final int MAX_PG_CHANGE_STREAMS_PER_DATABASE = 9;
+    private static final AtomicInteger pgChangeStreamsCreatedOnCurrentDatabase = new AtomicInteger(0);
+    private static final AtomicReference<Database> currentPgDatabase = new AtomicReference<>(pgDatabase);
+    private static final AtomicReference<Connection> currentPgDatabaseConnection = new AtomicReference<>(pgDatabaseConnection);
+    private static final AtomicReference<Configuration> currentBasePgConfig = new AtomicReference<>(basePgConfig);
+
+    /**
+     * Called once per test that's about to create a PostgreSQL-dialect change stream. Rotates in a
+     * fresh PostgreSQL-dialect database (updating {@link #currentPgDatabase},
+     * {@link #currentPgDatabaseConnection}, {@link #currentBasePgConfig}) once the current one has
+     * had {@value #MAX_PG_CHANGE_STREAMS_PER_DATABASE} change streams created against it.
+     */
+    private static synchronized void registerPgChangeStreamCreation() {
+        if (pgChangeStreamsCreatedOnCurrentDatabase.incrementAndGet() > MAX_PG_CHANGE_STREAMS_PER_DATABASE) {
+            Database freshDatabase = Database.builder()
+                    .generateDatabaseId()
+                    .dialect(Dialect.POSTGRESQL)
+                    .build();
+            Connection freshConnection = Connection.isRealSpanner()
+                    ? RealSpannerTestSupport.getConnection(freshDatabase)
+                    : freshDatabase.getConnection();
+            Configuration freshConfig = Connection.isRealSpanner()
+                    ? createBaseConfigBuilder(freshDatabase, true).build()
+                    : Configuration.copy(baseConfig)
+                            .with("gcp.spanner.instance.id", freshDatabase.getInstanceId())
+                            .with("gcp.spanner.project.id", freshDatabase.getProjectId())
+                            .with("gcp.spanner.database.id", freshDatabase.getDatabaseId())
+                            .build();
+            LOG.info("Rotating to a fresh PostgreSQL-dialect database {} (from {}) after reaching the "
+                    + "local emulator's per-database change stream cap",
+                    freshDatabase.getDatabaseId(), currentPgDatabase.get().getDatabaseId());
+            currentPgDatabase.set(freshDatabase);
+            currentPgDatabaseConnection.set(freshConnection);
+            currentBasePgConfig.set(freshConfig);
+            pgChangeStreamsCreatedOnCurrentDatabase.set(1);
+        }
+    }
 
     static {
         // Real Cloud Spanner change-stream reads plus this connector's task-sync/leader-election
@@ -147,18 +207,28 @@ public class MutableKeyRangeIT extends AbstractSpannerConnectorIT {
 
     /**
      * Resolves the {@link Connection} to use for a given {@link Dialect}, for tests parameterized
-     * over dialect.
+     * over dialect. For {@link Dialect#POSTGRESQL}, this is the trigger point for
+     * {@link #registerPgChangeStreamCreation()}: callers are expected to call this once per test,
+     * immediately before creating that test's change stream, and to reuse the returned
+     * {@link Connection} for the rest of the test (including config building via
+     * {@link #baseConfigFor}) so the connection and config always refer to the same database.
      */
     private Connection connectionFor(Dialect dialect) {
-        return dialect == Dialect.POSTGRESQL ? pgDatabaseConnection : databaseConnection;
+        if (dialect == Dialect.POSTGRESQL) {
+            registerPgChangeStreamCreation();
+            return currentPgDatabaseConnection.get();
+        }
+        return databaseConnection;
     }
 
     /**
      * Resolves the base {@link Configuration} to use for a given {@link Dialect}, for tests
-     * parameterized over dialect.
+     * parameterized over dialect. Must be called after {@link #connectionFor} in the same test, so
+     * that if {@link #connectionFor} rotated in a fresh PostgreSQL-dialect database, this returns
+     * the config matching that same database rather than a stale one.
      */
     private Configuration baseConfigFor(Dialect dialect) {
-        return dialect == Dialect.POSTGRESQL ? basePgConfig : baseConfig;
+        return dialect == Dialect.POSTGRESQL ? currentBasePgConfig.get() : baseConfig;
     }
 
     /**
@@ -302,10 +372,10 @@ public class MutableKeyRangeIT extends AbstractSpannerConnectorIT {
     @ParameterizedTest
     @EnumSource(Dialect.class)
     void shouldStreamCrudEventsToKafka(Dialect dialect) throws InterruptedException, ExecutionException {
-        Connection connection = dialect == Dialect.POSTGRESQL ? pgDatabaseConnection : databaseConnection;
-        Configuration base = dialect == Dialect.POSTGRESQL ? basePgConfig : baseConfig;
-        String table = TABLE_CRUD + "_" + dialect.name().toLowerCase();
-        String stream = STREAM_CRUD + dialect.name();
+        Connection connection = connectionFor(dialect);
+        Configuration base = baseConfigFor(dialect);
+        String table = tableFor(TABLE_CRUD, dialect);
+        String stream = streamFor(STREAM_CRUD, dialect);
 
         createMutableKeyRangeTableAndStream(connection, dialect, table, stream);
         try {
