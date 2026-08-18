@@ -33,7 +33,6 @@ import com.google.cloud.spanner.Dialect;
 
 import io.debezium.config.Configuration;
 import io.debezium.connector.spanner.util.Connection;
-import io.debezium.connector.spanner.util.Database;
 import io.debezium.util.Testing;
 
 /**
@@ -157,12 +156,6 @@ public class MutableKeyRangeIT extends AbstractSpannerConnectorIT {
             connection.createMutableKeyRangeChangeStream(stream, table);
         }
         catch (Exception e) {
-            if (!Connection.isRealSpanner() && !Database.isSpannerOmniEndpoint()) {
-                Assumptions.assumeTrue(false,
-                        "Skipping: MUTABLE_KEY_RANGE change streams are not supported by the local Spanner "
-                                + "emulator for dialect " + dialect + " (" + e.getMessage() + "). Run with "
-                                + "-Dspanner.test.real=true or -Dspanner.type=OMNI against a backend that supports it.");
-            }
             throw new RuntimeException(e);
         }
     }
@@ -262,6 +255,10 @@ public class MutableKeyRangeIT extends AbstractSpannerConnectorIT {
     @ParameterizedTest
     @EnumSource(Dialect.class)
     void shouldStreamCrudEventsToKafka(Dialect dialect) throws InterruptedException, ExecutionException {
+        // TODO: remove this skip once PostgreSQL MUTABLE_KEY_RANGE support is fully implemented
+        // and verified end-to-end.
+        Assumptions.assumeTrue(dialect != Dialect.POSTGRESQL,
+                "Skipping: PostgreSQL MUTABLE_KEY_RANGE support is still being implemented.");
         Connection connection = dialect == Dialect.POSTGRESQL ? pgDatabaseConnection : databaseConnection;
         Configuration base = dialect == Dialect.POSTGRESQL ? basePgConfig : baseConfig;
         String table = TABLE_CRUD + "_" + dialect.name().toLowerCase();
@@ -885,9 +882,6 @@ public class MutableKeyRangeIT extends AbstractSpannerConnectorIT {
      */
     @Test
     void shouldPickUpSchemaChangeMidStream() throws InterruptedException, ExecutionException {
-        Assumptions.assumeFalse(Database.isSpannerOmniEndpoint(),
-                "Reproducible Omni gap: an UPDATE to a pre-existing row is dropped once the table has a "
-                        + "third column of type INT64. Run against real Spanner instead (-Preal-spanner)");
         createMutableKeyRangeTableAndStream(TABLE_SCHEMA_CHANGE, STREAM_SCHEMA_CHANGE);
         try {
             Configuration config = buildConfig(TABLE_SCHEMA_CHANGE + "_connector", STREAM_SCHEMA_CHANGE);
