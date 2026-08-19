@@ -128,7 +128,7 @@ public class MutableKeyRangeIT extends AbstractSpannerConnectorIT {
                     : freshDatabase.getConnection();
             Configuration freshConfig = Connection.isRealSpanner()
                     ? createBaseConfigBuilder(freshDatabase, true).build()
-                    : Configuration.copy(baseConfig)
+                    : Configuration.copy(currentBasePgConfig.get())
                             .with("gcp.spanner.instance.id", freshDatabase.getInstanceId())
                             .with("gcp.spanner.project.id", freshDatabase.getProjectId())
                             .with("gcp.spanner.database.id", freshDatabase.getDatabaseId())
