@@ -35,11 +35,13 @@ public class DaoFactory {
 
     public ChangeStreamDao getStreamDao(String changeStreamName,
                                         Options.RpcPriority rpcPriority, String jobName) {
+        return getStreamDao(changeStreamName, Collections.emptyList(), rpcPriority, jobName);
+    }
+
+    public ChangeStreamDao getStreamDao(String changeStreamName, List<String> placementTvfNames,
+                                        Options.RpcPriority rpcPriority, String jobName) {
         SchemaDao schemaDao = getSchemaDao();
         boolean isMutableKeyRange = schemaDao.isMutableKeyRangeChangeStream(changeStreamName);
-        List<String> placementTvfNames = schemaDao.isPerPlacementTvfChangeStream(changeStreamName)
-                ? schemaDao.getPlacementTvfNames(changeStreamName)
-                : Collections.emptyList();
         return new ChangeStreamDao(changeStreamName, isMutableKeyRange, placementTvfNames,
                 this.databaseClientFactory.getDatabaseClient(), rpcPriority, jobName);
     }

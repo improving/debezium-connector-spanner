@@ -6,6 +6,8 @@
 package io.debezium.connector.spanner.db;
 
 import java.time.Duration;
+import java.util.Collections;
+import java.util.List;
 import java.util.UUID;
 
 import org.slf4j.Logger;
@@ -45,7 +47,7 @@ public class SpannerChangeStreamFactory {
 
     public SpannerChangeStream getStream(
                                          String changeStreamName, Duration heartbeatMillis, int maxMissedHeartbeats, int windowMinutes) {
-        return getStream(changeStreamName, heartbeatMillis, maxMissedHeartbeats, windowMinutes,
+        return getStream(changeStreamName, Collections.emptyList(), heartbeatMillis, maxMissedHeartbeats, windowMinutes,
                 MutableStreamOptions.withDefaults());
     }
 
@@ -60,9 +62,16 @@ public class SpannerChangeStreamFactory {
     public SpannerChangeStream getStream(
                                          String changeStreamName, Duration heartbeatMillis, int maxMissedHeartbeats, int windowMinutes,
                                          MutableStreamOptions options) {
+        return getStream(changeStreamName, Collections.emptyList(), heartbeatMillis, maxMissedHeartbeats, windowMinutes, options);
+    }
+
+    public SpannerChangeStream getStream(
+                                         String changeStreamName, List<String> placementTvfNames, Duration heartbeatMillis,
+                                         int maxMissedHeartbeats, int windowMinutes, MutableStreamOptions options) {
 
         ChangeStreamDao changeStreamDao = daoFactory.getStreamDao(
                 changeStreamName,
+                placementTvfNames,
                 Options.RpcPriority.MEDIUM,
                 JOB_NAME + "_" + connectorName + "_" + UUID.randomUUID());
 
