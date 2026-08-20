@@ -64,6 +64,8 @@ public class SynchronizationTaskContext {
 
     private final PartitionFactory partitionFactory;
 
+    private final PartitionOffsetProvider partitionOffsetProvider;
+
     private final LowWatermarkStampPublisher lowWatermarkStampPublisher;
 
     private final Runnable finishingHandler;
@@ -100,6 +102,8 @@ public class SynchronizationTaskContext {
         this.task = task;
 
         this.connectorConfig = connectorConfig;
+
+        this.partitionOffsetProvider = partitionOffsetProvider;
 
         this.errorHandler = errorHandler;
 
@@ -244,6 +248,9 @@ public class SynchronizationTaskContext {
 
             this.rebalanceHandler.destroy();
             LOGGER.info("Task {}, Shut down rebalance handler", this.taskSyncContextHolder.get().getTaskUid());
+
+            this.partitionOffsetProvider.shutdown();
+            LOGGER.info("Task {}, Shut down PartitionOffsetProvider", this.taskSyncContextHolder.get().getTaskUid());
 
         }
         catch (Exception ex) {
