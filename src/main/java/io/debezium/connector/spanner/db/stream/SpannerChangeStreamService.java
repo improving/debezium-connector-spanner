@@ -191,6 +191,23 @@ public class SpannerChangeStreamService {
 
                     processEvents(partition, events, changeStreamEventConsumer);
 
+                    // Advance processedTimestamp in the sync context on every heartbeat so that
+                    // the MoveIn ordering gate (sourceHasResumedThisMove) resolves within
+                    // heartbeatMillis rather than waiting for a full 20-minute window to close.
+                    //
+                    // Without this, when a partition's window is interrupted by a MoveIn event
+                    // the outer loop's onWindowAdvanced call is never reached, permanently
+                    // freezing processedTimestamp in the sync context. Downstream partitions in
+                    // CREATED state then wait N×20 minutes per chain link before they can resume.
+                    //
+                    // The outer loop's local `processedTimestamp` variable is intentionally NOT
+                    // modified here — 20-minute window-boundary tracking is unaffected.
+                    if (!events.isEmpty() && events.get(0) instanceof HeartbeatEvent) {
+                        HeartbeatEvent heartbeat = (HeartbeatEvent) events.get(0);
+                        partitionEventListener.onWindowAdvanced(
+                                partition, heartbeat.getRecordTimestamp(), lastBoundaryRecordSequence);
+                    }
+
                     for (ChangeStreamEvent event : events) {
                         if (event instanceof PartitionEndEvent) {
                             isPartitionEnded = true;

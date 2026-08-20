@@ -31,6 +31,7 @@ import io.debezium.connector.spanner.db.model.InitialPartition;
 import io.debezium.connector.spanner.db.model.Partition;
 import io.debezium.connector.spanner.db.model.StreamEventMetadata;
 import io.debezium.connector.spanner.db.model.event.FinishPartitionEvent;
+import io.debezium.connector.spanner.db.model.event.HeartbeatEvent;
 import io.debezium.connector.spanner.db.model.event.PartitionEndEvent;
 import io.debezium.connector.spanner.db.model.event.PartitionEventEvent;
 import io.debezium.connector.spanner.metrics.MetricsEventPublisher;
@@ -380,6 +381,48 @@ class SpannerChangeStreamServiceTest {
         verify(listener).onFinish(partition);
         verify(consumer).acceptChangeStreamEvent(any(FinishPartitionEvent.class));
         verify(consumer).acceptChangeStreamEvent(moveInEvent);
+    }
+
+    /**
+     * Verifies that onWindowAdvanced is called on every heartbeat inside the mutable streaming
+     * loop — not only at the end of a 20-minute window.  This allows the MoveIn ordering gate
+     * (sourceHasResumedThisMove) to unblock waiting CREATED partitions within heartbeatMillis
+     * instead of waiting up to N×20 minutes for chained window boundaries to close.
+     */
+    @Test
+    void testGetEventsMutableCallsOnWindowAdvancedOnHeartbeat() throws Exception {
+        ChangeStreamDao changeStreamDao = mock(ChangeStreamDao.class);
+        ChangeStreamResultSet resultSet = mock(ChangeStreamResultSet.class);
+        ChangeStreamRecordMapper mapper = mock(ChangeStreamRecordMapper.class);
+        MetricsEventPublisher metricsEventPublisher = mock(MetricsEventPublisher.class);
+
+        when(changeStreamDao.isMutableKeyRange()).thenReturn(true);
+        when(changeStreamDao.streamQuery(any(), any(), any(), anyLong())).thenReturn(resultSet);
+        // One heartbeat event then end-of-stream.
+        when(resultSet.next()).thenReturn(true, false);
+
+        Timestamp start = Timestamp.ofTimeSecondsAndNanos(0, 0);
+        Timestamp heartbeatTs = Timestamp.ofTimeSecondsAndNanos(60, 0);
+        StreamEventMetadata meta = StreamEventMetadata.newBuilder().withPartitionToken("token").build();
+        HeartbeatEvent heartbeatEvent = new HeartbeatEvent(heartbeatTs, meta);
+        when(mapper.toChangeStreamEvents(any(), any(), any())).thenReturn(List.of(heartbeatEvent));
+
+        SpannerChangeStreamService service = new SpannerChangeStreamService(
+                "TaskUid", changeStreamDao, mapper, Duration.ofMillis(1000), metricsEventPublisher);
+
+        // end == start so the outer loop exits after a single window.
+        Timestamp end = Timestamp.ofTimeSecondsAndNanos(0, 0);
+        Partition partition = new Partition("token", new HashSet<>(), start, end, "origin");
+
+        ChangeStreamEventConsumer consumer = mock(ChangeStreamEventConsumer.class);
+        PartitionEventListener listener = mock(PartitionEventListener.class);
+        doNothing().when(listener).onRun(any());
+
+        service.getEvents(partition, consumer, listener);
+
+        // The heartbeat timestamp must have been published into the sync context immediately,
+        // without waiting for the 20-minute window boundary to close.
+        verify(listener).onWindowAdvanced(partition, heartbeatTs, null);
     }
 
     @Test
