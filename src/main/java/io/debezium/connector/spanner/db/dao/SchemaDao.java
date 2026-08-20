@@ -6,8 +6,9 @@
 package io.debezium.connector.spanner.db.dao;
 
 import java.util.Collection;
-import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import com.google.cloud.Timestamp;
@@ -117,16 +118,112 @@ public class SchemaDao {
     }
 
     /**
-     * Returns the names of the per-placement read table-valued functions (e.g.
-     * {@code READ_Foo_US}, {@code READ_Foo_EU}) that must be queried and unioned for a change
-     * stream created with {@code per_placement_tvf = true}.
+     * Validates a caller-supplied list of per-placement read table-valued function (TVF) names
+     * (e.g. {@code READ_Foo_US}, {@code READ_Foo_EU}) configured via
+     * {@code gcp.spanner.placement.tvf.names} for {@code changeStreamName}.
      *
-     * TODO: implement placement discovery once the information_schema shape exposing a change
-     * stream's placements is confirmed. Returns an empty list for now, which callers should
-     * treat as "no per-placement TVFs, fall back to the regular READ_<streamName> function".
+     * <p>Spanner does not expose an information_schema relation that maps a change stream to its
+     * per-placement TVFs directly, so, similar to the check the Apache Beam Spanner change
+     * streams connector performs before unioning a list of TVFs (see
+     * {@code SpannerIO#checkTvfExistence}), this queries {@code information_schema.routines} -
+     * which for change streams lists their auto-generated read functions - to confirm each
+     * configured name actually exists as a function. Unlike the Beam implementation (which only
+     * checks existence), this additionally verifies that every configured TVF is actually
+     * associated with {@code changeStreamName}, based on the naming convention Spanner uses for
+     * change stream read functions: {@code READ_<changeStreamName>[_<placement>]} for GoogleSQL,
+     * and {@code read_proto_bytes_<changeStreamName>[_<placement>]} /
+     * {@code read_json_<changeStreamName>[_<placement>]} for PostgreSQL (depending on whether the
+     * stream is mutable). This guards against a misconfigured list silently reading a different
+     * change stream's placement data.
+     *
+     * @throws IllegalArgumentException if the stream does not have {@code per_placement_tvf}
+     *     enabled, or if any configured TVF does not exist or is not associated with the stream
      */
-    public List<String> getPlacementTvfNames(String streamName) {
-        return Collections.emptyList();
+    public void validatePlacementTvfNames(String streamName, List<String> placementTvfNames) {
+        if (placementTvfNames == null || placementTvfNames.isEmpty()) {
+            return;
+        }
+
+        if (!isPerPlacementTvfChangeStream(streamName)) {
+            throw new IllegalArgumentException("Configured placement TVF names " + placementTvfNames
+                    + " for change stream '" + streamName + "', but this change stream does not have "
+                    + "the 'per_placement_tvf' option enabled.");
+        }
+
+        Set<String> existingRoutineNames = readExistingRoutineNames(placementTvfNames);
+        String expectedPrefix = expectedTvfPrefix(streamName);
+
+        for (String tvfName : placementTvfNames) {
+            String bareName = isPostgres() ? stripPostgresQuoting(tvfName) : tvfName;
+            if (!existingRoutineNames.contains(bareName)) {
+                throw new IllegalArgumentException("Configured placement TVF '" + tvfName
+                        + "' was not found among the database's routines: " + existingRoutineNames);
+            }
+            if (!isAssociatedWithChangeStream(bareName, expectedPrefix)) {
+                throw new IllegalArgumentException("Configured placement TVF '" + tvfName
+                        + "' does not appear to be associated with change stream '" + streamName
+                        + "' (expected a name matching '" + expectedPrefix + "' or '" + expectedPrefix + "_<placement>')");
+            }
+        }
+    }
+
+    /**
+     * Builds the expected read-function name prefix for {@code streamName}, following the same
+     * naming convention used to build the default TVF name in
+     * {@link ChangeStreamDao#streamQuery(String, String, Timestamp, Timestamp, long)}.
+     */
+    private String expectedTvfPrefix(String streamName) {
+        if (isPostgres()) {
+            String base = isMutableKeyRangeChangeStream(streamName) ? "read_proto_bytes_" : "read_json_";
+            return (base + streamName).toLowerCase();
+        }
+        return "READ_" + streamName;
+    }
+
+    private boolean isAssociatedWithChangeStream(String bareTvfName, String expectedPrefix) {
+        String candidate = isPostgres() ? bareTvfName.toLowerCase() : bareTvfName;
+        return candidate.equals(expectedPrefix) || candidate.startsWith(expectedPrefix + "_");
+    }
+
+    private String stripPostgresQuoting(String tvfName) {
+        String unquoted = tvfName.replace("\"", "");
+        int lastDot = unquoted.lastIndexOf('.');
+        return lastDot >= 0 ? unquoted.substring(lastDot + 1) : unquoted;
+    }
+
+    /**
+     * Queries {@code information_schema.routines} for the subset of {@code tvfNames} that exist
+     * as table-valued functions, mirroring the existence check performed by the Apache Beam
+     * Spanner change streams connector (see {@code SpannerIO#checkTvfExistence}).
+     */
+    private Set<String> readExistingRoutineNames(List<String> tvfNames) {
+        Set<String> found = new HashSet<>();
+        try (ReadOnlyTransaction tx = databaseClient.readOnlyTransaction()) {
+            ResultSet resultSet = tx.executeQuery(buildRoutineExistenceStatement(tvfNames));
+            while (resultSet.next()) {
+                found.add(resultSet.getString(0));
+            }
+        }
+        return found;
+    }
+
+    private Statement buildRoutineExistenceStatement(List<String> tvfNames) {
+        StringBuilder sql = new StringBuilder(
+                "SELECT routine_name FROM information_schema.routines WHERE routine_type LIKE '%FUNCTION' AND routine_name IN (");
+        for (int i = 0; i < tvfNames.size(); i++) {
+            sql.append(isPostgres() ? "$" + (i + 1) : "@p" + i);
+            if (i < tvfNames.size() - 1) {
+                sql.append(", ");
+            }
+        }
+        sql.append(")");
+
+        Statement.Builder builder = Statement.newBuilder(sql.toString());
+        for (int i = 0; i < tvfNames.size(); i++) {
+            String bareName = isPostgres() ? stripPostgresQuoting(tvfNames.get(i)) : tvfNames.get(i);
+            builder.bind(isPostgres() ? "p" + (i + 1) : "p" + i).to(bareName);
+        }
+        return builder.build();
     }
 
     private ResultSet readColumnsInfo(ReadOnlyTransaction tx, Collection<String> tables) {

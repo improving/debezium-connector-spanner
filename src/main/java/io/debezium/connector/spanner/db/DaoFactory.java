@@ -42,6 +42,11 @@ public class DaoFactory {
                                         Options.RpcPriority rpcPriority, String jobName) {
         SchemaDao schemaDao = getSchemaDao();
         boolean isMutableKeyRange = schemaDao.isMutableKeyRangeChangeStream(changeStreamName);
+        if (!placementTvfNames.isEmpty() && !isMutableKeyRange) {
+            throw new IllegalArgumentException("gcp.spanner.placement.tvf.names is only supported for change streams "
+                    + "with MUTABLE_KEY_RANGE partition mode; change stream '" + changeStreamName + "' is not one.");
+        }
+        schemaDao.validatePlacementTvfNames(changeStreamName, placementTvfNames);
         return new ChangeStreamDao(changeStreamName, isMutableKeyRange, placementTvfNames,
                 this.databaseClientFactory.getDatabaseClient(), rpcPriority, jobName);
     }

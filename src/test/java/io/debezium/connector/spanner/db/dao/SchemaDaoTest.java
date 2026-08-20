@@ -5,8 +5,10 @@
  */
 package io.debezium.connector.spanner.db.dao;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.anyInt;
@@ -15,6 +17,8 @@ import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
@@ -130,5 +134,130 @@ class SchemaDaoTest {
 
         verify(databaseClient).readOnlyTransaction();
         verify(readOnlyTransaction).executeQuery(any());
+    }
+
+    @Test
+    void testValidatePlacementTvfNamesEmptyListIsNoOp() throws SpannerException {
+        DatabaseClient databaseClient = mock(DatabaseClient.class);
+        SchemaDao schemaDao = new SchemaDao(databaseClient);
+
+        assertDoesNotThrow(() -> schemaDao.validatePlacementTvfNames("Foo", List.of()));
+
+        verify(databaseClient, org.mockito.Mockito.never()).readOnlyTransaction();
+    }
+
+    @Test
+    void testValidatePlacementTvfNamesGoogleSqlSuccess() throws SpannerException {
+        DatabaseClient databaseClient = mock(DatabaseClient.class);
+        when(databaseClient.getDialect()).thenReturn(Dialect.GOOGLE_STANDARD_SQL);
+        ReadOnlyTransaction readOnlyTransaction = mock(ReadOnlyTransaction.class);
+        when(databaseClient.readOnlyTransaction()).thenReturn(readOnlyTransaction);
+
+        ResultSet optionsResultSet = mock(ResultSet.class);
+        when(optionsResultSet.next()).thenReturn(true, false);
+        when(optionsResultSet.getString(0)).thenReturn("per_placement_tvf");
+        when(optionsResultSet.getString(1)).thenReturn("true");
+
+        ResultSet routinesResultSet = mock(ResultSet.class);
+        when(routinesResultSet.next()).thenReturn(true, true, false);
+        when(routinesResultSet.getString(0)).thenReturn("READ_Foo_US", "READ_Foo_EU");
+
+        when(readOnlyTransaction.executeQuery(any())).thenReturn(optionsResultSet, routinesResultSet);
+
+        SchemaDao schemaDao = new SchemaDao(databaseClient);
+        assertDoesNotThrow(() -> schemaDao.validatePlacementTvfNames("Foo", List.of("READ_Foo_US", "READ_Foo_EU")));
+    }
+
+    @Test
+    void testValidatePlacementTvfNamesPostgresSuccessWithQuoting() throws SpannerException {
+        DatabaseClient databaseClient = mock(DatabaseClient.class);
+        when(databaseClient.getDialect()).thenReturn(Dialect.POSTGRESQL);
+        ReadOnlyTransaction readOnlyTransaction = mock(ReadOnlyTransaction.class);
+        when(databaseClient.readOnlyTransaction()).thenReturn(readOnlyTransaction);
+
+        ResultSet optionsResultSet = mock(ResultSet.class);
+        when(optionsResultSet.next()).thenReturn(true, false);
+        when(optionsResultSet.getString(0)).thenReturn("per_placement_tvf");
+        when(optionsResultSet.getString(1)).thenReturn("true");
+
+        ResultSet routinesResultSet = mock(ResultSet.class);
+        when(routinesResultSet.next()).thenReturn(true, false);
+        when(routinesResultSet.getString(0)).thenReturn("read_proto_bytes_foo_us");
+
+        ResultSet mutableOptionsResultSet = mock(ResultSet.class);
+        when(mutableOptionsResultSet.next()).thenReturn(true, false);
+        when(mutableOptionsResultSet.getString(0)).thenReturn("partition_mode");
+        when(mutableOptionsResultSet.getString(1)).thenReturn("MUTABLE_KEY_RANGE");
+
+        when(readOnlyTransaction.executeQuery(any()))
+                .thenReturn(optionsResultSet, routinesResultSet, mutableOptionsResultSet);
+
+        SchemaDao schemaDao = new SchemaDao(databaseClient);
+        assertDoesNotThrow(() -> schemaDao.validatePlacementTvfNames("foo",
+                List.of("\"spanner\".\"read_proto_bytes_foo_us\"")));
+    }
+
+    @Test
+    void testValidatePlacementTvfNamesNotAssociatedWithChangeStream() throws SpannerException {
+        DatabaseClient databaseClient = mock(DatabaseClient.class);
+        when(databaseClient.getDialect()).thenReturn(Dialect.GOOGLE_STANDARD_SQL);
+        ReadOnlyTransaction readOnlyTransaction = mock(ReadOnlyTransaction.class);
+        when(databaseClient.readOnlyTransaction()).thenReturn(readOnlyTransaction);
+
+        ResultSet optionsResultSet = mock(ResultSet.class);
+        when(optionsResultSet.next()).thenReturn(true, false);
+        when(optionsResultSet.getString(0)).thenReturn("per_placement_tvf");
+        when(optionsResultSet.getString(1)).thenReturn("true");
+
+        // The TVF exists as a routine, but it belongs to a different change stream ("Other"),
+        // not the one ("Foo") it was configured for.
+        ResultSet routinesResultSet = mock(ResultSet.class);
+        when(routinesResultSet.next()).thenReturn(true, false);
+        when(routinesResultSet.getString(0)).thenReturn("READ_Other_US");
+
+        when(readOnlyTransaction.executeQuery(any())).thenReturn(optionsResultSet, routinesResultSet);
+
+        SchemaDao schemaDao = new SchemaDao(databaseClient);
+        assertThrows(IllegalArgumentException.class,
+                () -> schemaDao.validatePlacementTvfNames("Foo", List.of("READ_Other_US")));
+    }
+
+    @Test
+    void testValidatePlacementTvfNamesTvfDoesNotExist() throws SpannerException {
+        DatabaseClient databaseClient = mock(DatabaseClient.class);
+        when(databaseClient.getDialect()).thenReturn(Dialect.GOOGLE_STANDARD_SQL);
+        ReadOnlyTransaction readOnlyTransaction = mock(ReadOnlyTransaction.class);
+        when(databaseClient.readOnlyTransaction()).thenReturn(readOnlyTransaction);
+
+        ResultSet optionsResultSet = mock(ResultSet.class);
+        when(optionsResultSet.next()).thenReturn(true, false);
+        when(optionsResultSet.getString(0)).thenReturn("per_placement_tvf");
+        when(optionsResultSet.getString(1)).thenReturn("true");
+
+        ResultSet routinesResultSet = mock(ResultSet.class);
+        when(routinesResultSet.next()).thenReturn(false);
+
+        when(readOnlyTransaction.executeQuery(any())).thenReturn(optionsResultSet, routinesResultSet);
+
+        SchemaDao schemaDao = new SchemaDao(databaseClient);
+        assertThrows(IllegalArgumentException.class,
+                () -> schemaDao.validatePlacementTvfNames("Foo", List.of("READ_Foo_US")));
+    }
+
+    @Test
+    void testValidatePlacementTvfNamesOptionNotEnabled() throws SpannerException {
+        DatabaseClient databaseClient = mock(DatabaseClient.class);
+        when(databaseClient.getDialect()).thenReturn(Dialect.GOOGLE_STANDARD_SQL);
+        ReadOnlyTransaction readOnlyTransaction = mock(ReadOnlyTransaction.class);
+        when(databaseClient.readOnlyTransaction()).thenReturn(readOnlyTransaction);
+
+        ResultSet optionsResultSet = mock(ResultSet.class);
+        when(optionsResultSet.next()).thenReturn(false);
+
+        when(readOnlyTransaction.executeQuery(any())).thenReturn(optionsResultSet);
+
+        SchemaDao schemaDao = new SchemaDao(databaseClient);
+        assertThrows(IllegalArgumentException.class,
+                () -> schemaDao.validatePlacementTvfNames("Foo", List.of("READ_Foo_US")));
     }
 }

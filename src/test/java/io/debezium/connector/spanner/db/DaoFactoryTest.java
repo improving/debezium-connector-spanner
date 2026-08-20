@@ -6,6 +6,7 @@
 package io.debezium.connector.spanner.db;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
@@ -13,6 +14,8 @@ import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
@@ -48,5 +51,41 @@ class DaoFactoryTest {
         ChangeStreamDao actualStreamDao = daoFactory.getStreamDao(changeStreamName, rpcPriority, jobName);
         assertNotNull(actualStreamDao);
         verify(mockSchema, times(1)).isMutableKeyRangeChangeStream(changeStreamName);
+    }
+
+    @Test
+    void testGetStreamDaoWithPlacementTvfNamesValidatesAgainstSchema() {
+        DatabaseClientFactory databaseClientFactory = mock(DatabaseClientFactory.class);
+        SchemaDao mockSchema = mock(SchemaDao.class);
+        when(mockSchema.isMutableKeyRangeChangeStream(any())).thenReturn(true);
+
+        DaoFactory daoFactory = spy(new DaoFactory(databaseClientFactory));
+        doReturn(mockSchema).when(daoFactory).getSchemaDao();
+
+        String changeStreamName = "Foo";
+        List<String> placementTvfNames = List.of("READ_Foo_US", "READ_Foo_EU");
+        Options.RpcPriority rpcPriority = Options.RpcPriority.LOW;
+        String jobName = "";
+
+        ChangeStreamDao actualStreamDao = daoFactory.getStreamDao(changeStreamName, placementTvfNames, rpcPriority, jobName);
+
+        assertNotNull(actualStreamDao);
+        verify(mockSchema, times(1)).validatePlacementTvfNames(changeStreamName, placementTvfNames);
+    }
+
+    @Test
+    void testGetStreamDaoWithPlacementTvfNamesFailsWhenNotMutableKeyRange() {
+        DatabaseClientFactory databaseClientFactory = mock(DatabaseClientFactory.class);
+        SchemaDao mockSchema = mock(SchemaDao.class);
+        when(mockSchema.isMutableKeyRangeChangeStream(any())).thenReturn(false);
+
+        DaoFactory daoFactory = spy(new DaoFactory(databaseClientFactory));
+        doReturn(mockSchema).when(daoFactory).getSchemaDao();
+
+        String changeStreamName = "Foo";
+        List<String> placementTvfNames = List.of("READ_Foo_US");
+
+        assertThrows(IllegalArgumentException.class,
+                () -> daoFactory.getStreamDao(changeStreamName, placementTvfNames, Options.RpcPriority.LOW, ""));
     }
 }
