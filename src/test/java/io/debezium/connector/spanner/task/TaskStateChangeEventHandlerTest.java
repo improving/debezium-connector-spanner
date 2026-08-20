@@ -136,6 +136,9 @@ class TaskStateChangeEventHandlerTest {
         MoveOutNotificationEvent event = new MoveOutNotificationEvent("src", moveTimestamp, List.of("dst"));
 
         handler.processEvent(event);
+        // Drain the dedicated partition-scheduling executor before asserting: the offset fetch
+        // and stream submission now run asynchronously off the event-processor thread.
+        handler.shutdown();
 
         PartitionState updatedDest = taskSyncContextHolder.get().getCurrentTaskState().getPartitions().stream()
                 .filter(p -> p.getToken().equals("dst"))
@@ -150,6 +153,6 @@ class TaskStateChangeEventHandlerTest {
         assertEquals(moveTimestamp, updatedSource.getMoveOutStates().get(0).getTimestamp());
         assertEquals(Set.of("dst"), updatedSource.getMoveOutStates().get(0).getDestPartitionTokens());
         assertEquals(PartitionStateEnum.SCHEDULED, updatedDest.getState(),
-                "destination partition must be found and scheduled for streaming in the same pass as the MoveOut, not just have its moveOutState recorded");
+                "destination partition must be found and scheduled for streaming after the async offset-fetch completes");
     }
 }

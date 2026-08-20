@@ -243,6 +243,11 @@ public class SynchronizationTaskContext {
             this.taskStateChangeEventProcessor.stopProcessing();
             LOGGER.info("Task {}, Shut down TaskStateChangeEventProcessor", this.taskSyncContextHolder.get().getTaskUid());
 
+            // Shut down the partition-scheduling executor only after the event processor is stopped
+            // so no new schedulePendingPartitionsAsync() calls can arrive after this point.
+            this.taskStateChangeEventHandler.shutdown();
+            LOGGER.info("Task {}, Shut down TaskStateChangeEventHandler partition scheduler", this.taskSyncContextHolder.get().getTaskUid());
+
             this.lowWatermarkCalculationJob.stop();
             LOGGER.info("Task {}, Shut down LowWatermarkCalculationJob", this.taskSyncContextHolder.get().getTaskUid());
 
