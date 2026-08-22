@@ -61,7 +61,18 @@ Before beginning, ensure you have the following tools installed and configured:
    - Go to **Account Settings → Security → New Access Token**
    - Save the token securely; you will need it in later steps.
 
-### 2.2 Build the Connector JAR
+### 2.2 Replace test/docker/DockerFile with the following
+  FROM mirror.gcr.io/confluentinc/cp-kafka-connect-base
+  ARG projectVersion
+  USER root
+  COPY target/debezium-connector-spanner-${projectVersion}-plugin/debezium-connector-spanner/ /usr/share/java/google-debezium-connector-spanner/
+  COPY src/test/docker/jmx_prometheus_javaagent-0.16.1.jar /usr/share/prometheus/jmx_prometheus_javaagent.jar
+  COPY src/test/docker/metrics-config.yml /usr/share/prometheus/metrics-config.yml
+  RUN chown -R appuser:appuser /usr/share/java/google-debezium-connector-spanner/
+  RUN chown -R appuser:appuser /usr/share/Prometheus/
+  USER appuser
+
+### 2.3 Build the Connector JAR
 
 From the root of the `debezium-connector-spanner` repository, run:
 
@@ -72,7 +83,7 @@ mvn clean package \
   -Ddocker.skip=true
 ```
 
-### 2.3 Build and Push the Docker Image
+### 2.4 Build and Push the Docker Image
 
 ```bash
 docker buildx build \
