@@ -61,7 +61,18 @@ Before beginning, ensure you have the following tools installed and configured:
    - Go to **Account Settings → Security → New Access Token**
    - Save the token securely; you will need it in later steps.
 
-### 2.2 Build the Connector JAR
+### 2.2 Replace test/docker/DockerFile with the following
+  FROM mirror.gcr.io/confluentinc/cp-kafka-connect-base
+  ARG projectVersion
+  USER root
+  COPY target/debezium-connector-spanner-${projectVersion}-plugin/debezium-connector-spanner/ /usr/share/java/google-debezium-connector-spanner/
+  COPY src/test/docker/jmx_prometheus_javaagent-0.16.1.jar /usr/share/prometheus/jmx_prometheus_javaagent.jar
+  COPY src/test/docker/metrics-config.yml /usr/share/prometheus/metrics-config.yml
+  RUN chown -R appuser:appuser /usr/share/java/google-debezium-connector-spanner/
+  RUN chown -R appuser:appuser /usr/share/Prometheus/
+  USER appuser
+
+### 2.3 Build the Connector JAR
 
 From the root of the `debezium-connector-spanner` repository, run:
 
@@ -72,7 +83,7 @@ mvn clean package \
   -Ddocker.skip=true
 ```
 
-### 2.3 Build and Push the Docker Image
+### 2.4 Build and Push the Docker Image
 
 ```bash
 docker buildx build \
@@ -224,7 +235,20 @@ terraform apply
 
 ---
 
-## Part 4: Expose Services in GKE
+## Part 4: Enable Authorized Networks on the GKE Cluster
+
+Once Terraform apply has finished, allow your IP address to reach the cluster's control plane:
+
+1. In the [Google Cloud Console](https://console.cloud.google.com), search for **Kubernetes Engine**.
+2. Click on the **spanner-connector** cluster.
+3. Click **Details**, then scroll to **Control Plane Networking** and click the pencil (edit) icon.
+4. Under **Access using IPv4 addresses**, check the box for **Enable Authorized Networks**.
+5. Add at least one authorized network using a CIDR range that includes the address from which you will be accessing the ports (e.g., `<YOUR_IP_ADDRESS>/32`).
+6. Click **Save changes**.
+
+---
+
+## Part 5: Expose Services in GKE
 
 Once Terraform completes, you need to expose four workloads as LoadBalancer services via the GCP Console:
 
@@ -242,15 +266,15 @@ Once Terraform completes, you need to expose four workloads as LoadBalancer serv
 
 ---
 
-## Part 5: Configure Local Access via Port Forwarding
+## Part 6: Configure Local Access via Port Forwarding
 
-### 5.1 Fetch Cluster Credentials
+### 6.1 Fetch Cluster Credentials
 
 ```bash
 gcloud container clusters get-credentials spanner-connector --zone us-central1-a
 ```
 
-### 5.2 Start Port Forwards
+### 6.2 Start Port Forwards
 
 Run the following commands to forward each service to your local machine:
 
@@ -272,7 +296,7 @@ The services will now be accessible at:
 
 ---
 
-## Part 6: Create the Spanner Database and Change Stream
+## Part 7: Create the Spanner Database and Change Stream
 
 In a new terminal, run:
 
@@ -293,6 +317,54 @@ This creates a `load-test` database with a `BenchmarkUsers` table and enables a 
 
 ---
 
+## Part 8: Register the Connector
+
+### 7.1 Configure `source.json`
+
+Create a `source.json` file (e.g., in the `debezium.connector.ops/gcp-k8s-helm` directory) with the connector configuration. Paste the full contents of your GCP Service Account JSON key into `gcp.spanner.credentials.json` as an escaped string:
+
+```json
+{
+  "name": "cdc-spanner-connector",
+  "config": {
+    "connector.class": "io.debezium.connector.spanner.SpannerConnector",
+    "gcp.spanner.change.stream": "mycs",
+    "gcp.spanner.project.id": "<GCP_PROJECT_ID>",
+    "gcp.spanner.instance.id": "spanner-kafka-connector",
+    "gcp.spanner.database.id": "load-test",
+    "gcp.spanner.low-watermark.enabled": "true",
+    "gcp.spanner.low-watermark.update-period.ms": "1000",
+    "tasks.max": "20",
+    "connector.spanner.sync.kafka.bootstrap.servers": "kafka-cp-kafka:9092",
+    "connector.spanner.sync.publisher.wait.timeout": "5000",
+    "gcp.spanner.stream.event.queue.capacity": "2000000",
+    "topic.creation.default.partitions": "10",
+    "topic.creation.default.replication.factor": "1",
+    "max.queue.size": "2000000",
+    "connector.spanner.max.missed.heartbeats": "600",
+    "heartbeat.interval.ms": "1000",
+    "gcp.spanner.credentials.json": "{\"type\": \"service_account\", \"project_id\": \"<GCP_PROJECT_ID>\", \"private_key_id\": \"<SERVICE_ACCOUNT_PRIVATE_KEY_ID>\", \"private_key\": \"<SERVICE_ACCOUNT_PRIVATE_KEY>\", \"client_email\": \"<SERVICE_ACCOUNT_EMAIL>\", \"client_id\": \"<SERVICE_ACCOUNT_CLIENT_ID>\", \"auth_uri\": \"https://accounts.google.com/o/oauth2/auth\", \"token_uri\": \"https://oauth2.googleapis.com/token\", \"auth_provider_x509_cert_url\": \"https://www.googleapis.com/oauth2/v1/certs\", \"client_x509_cert_url\": \"<SERVICE_ACCOUNT_CERT_URL>\", \"universe_domain\": \"googleapis.com\"}"
+  }
+}
+```
+
+> The entire service account JSON key must be inlined as a single escaped string value for `gcp.spanner.credentials.json` — double quotes inside it must be escaped with `\"`. Double-check the JSON is valid (e.g., with `jq . source.json`) before submitting it, as a single unescaped quote or missing field will cause the request in the next step to fail.
+
+### 7.2 Submit the Connector Configuration
+
+From the same terminal directory as `source.json`, POST it to the Kafka Connect REST API:
+
+```bash
+curl -i -X POST \
+  -H "Content-Type: application/json" \
+  http://localhost:8083/connectors \
+  -d @source.json
+```
+
+A `201 Created` response indicates the connector has been registered and will begin streaming changes from Spanner into Kafka.
+
+---
+
 ## Appendix: Placeholder Reference
 
 | Placeholder                           | Description                                         |
@@ -305,3 +377,9 @@ This creates a `load-test` database with a `BenchmarkUsers` table and enables a 
 | `<DOCKER_HUB_TOKEN>`                  | Your Docker Hub access token                        |
 | `<DOCKER_HUB_EMAIL>`                  | Your Docker Hub account email                       |
 | `<DOCKER_TAG>`                        | Tag for your connector Docker image                 |
+| `<SERVICE_ACCOUNT_PRIVATE_KEY_ID>`    | `private_key_id` field from your service account key |
+| `<SERVICE_ACCOUNT_PRIVATE_KEY>`       | `private_key` field from your service account key   |
+| `<SERVICE_ACCOUNT_EMAIL>`             | `client_email` field from your service account key  |
+| `<SERVICE_ACCOUNT_CLIENT_ID>`         | `client_id` field from your service account key     |
+| `<SERVICE_ACCOUNT_CERT_URL>`          | `client_x509_cert_url` field from your service account key |
+| `<YOUR_IP_ADDRESS>`                   | The public IP address (or CIDR range) you'll connect from  |
