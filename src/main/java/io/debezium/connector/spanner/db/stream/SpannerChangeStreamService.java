@@ -259,6 +259,19 @@ public class SpannerChangeStreamService {
         if (isPartitionMoveInEvent && moveInEvent != null) {
             LOGGER.info("Task {}, Pausing mutable partition {} after MoveIn event at {}, seq {}, sources {}",
                     taskUid, partition, moveInEvent.getCommitTimestamp(), moveInEvent.getRecordSequence(), moveInEvent.getSourcePartitions());
+
+            // Advance processedTimestamp to the MoveIn commit timestamp before pausing.
+            // When this partition's window loop exits early due to a MoveIn event, the normal
+            // onWindowAdvanced call at the bottom of the outer loop is never reached, leaving
+            // processedTimestamp frozen at the previous window boundary in the sync context.
+            // Downstream partitions in CREATED state rely on the processedTimestamp fallback
+            // in sourceHasResumedThisMove to unblock when the MoveOutState is missing (e.g.
+            // after a crash). Without this call they stall for a full window duration per chain
+            // link. The MoveIn commit timestamp is always >= the split timestamp that created
+            // those downstream partitions, so publishing it here satisfies their wait condition
+            // immediately, collapsing the N×windowDuration chain delay to near zero.
+            partitionEventListener.onWindowAdvanced(partition, moveInEvent.getCommitTimestamp(), lastBoundaryRecordSequence);
+
             partitionEventListener.onMoveIn(partition, moveInEvent.getCommitTimestamp(), moveInEvent.getRecordSequence(), moveInEvent.getSourcePartitions());
             return;
         }

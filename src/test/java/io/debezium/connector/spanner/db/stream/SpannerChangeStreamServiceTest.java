@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -423,6 +424,57 @@ class SpannerChangeStreamServiceTest {
         // The heartbeat timestamp must have been published into the sync context immediately,
         // without waiting for the 20-minute window boundary to close.
         verify(listener).onWindowAdvanced(partition, heartbeatTs, null);
+    }
+
+    /**
+     * Verifies that when the mutable streaming loop is interrupted by a MoveIn event,
+     * onWindowAdvanced is called with the MoveIn commit timestamp BEFORE onMoveIn.
+     *
+     * Without this, the outer loop's normal onWindowAdvanced call (at the window boundary)
+     * is never reached, leaving processedTimestamp frozen at the previous window boundary
+     * in the sync context. Downstream CREATED partitions that rely on the processedTimestamp
+     * fallback in sourceHasResumedThisMove then stall for a full window duration (or longer
+     * for each chain link). Publishing the MoveIn commit timestamp immediately satisfies their
+     * wait condition — it is always >= the split timestamp that created those partitions.
+     */
+    @Test
+    void testGetEventsMutableAdvancesProcessedTimestampBeforeMoveIn() throws Exception {
+        ChangeStreamDao changeStreamDao = mock(ChangeStreamDao.class);
+        ChangeStreamResultSet resultSet = mock(ChangeStreamResultSet.class);
+        ChangeStreamRecordMapper mapper = mock(ChangeStreamRecordMapper.class);
+        MetricsEventPublisher metricsEventPublisher = mock(MetricsEventPublisher.class);
+
+        when(changeStreamDao.isMutableKeyRange()).thenReturn(true);
+        when(changeStreamDao.streamQuery(any(), any(), any(), anyLong())).thenReturn(resultSet);
+        when(resultSet.next()).thenReturn(true, false);
+
+        Timestamp start = Timestamp.ofTimeSecondsAndNanos(0, 0);
+        Timestamp commitTimestamp = Timestamp.ofTimeSecondsAndNanos(600, 0);
+        StreamEventMetadata meta = StreamEventMetadata.newBuilder().withPartitionToken("dst").build();
+        PartitionEventEvent moveInEvent = new PartitionEventEvent(
+                commitTimestamp, "00001", "dst", List.of("src1"), List.of(), meta);
+        when(mapper.toChangeStreamEvents(any(), any(), any())).thenReturn(List.of(moveInEvent));
+
+        SpannerChangeStreamService service = new SpannerChangeStreamService(
+                "TaskUid", changeStreamDao, mapper, Duration.ofMillis(1000), metricsEventPublisher);
+
+        Partition partition = new Partition("dst", new HashSet<>(), start, null, "origin");
+
+        ChangeStreamEventConsumer consumer = mock(ChangeStreamEventConsumer.class);
+        PartitionEventListener listener = mock(PartitionEventListener.class);
+        doNothing().when(listener).onRun(any());
+
+        service.getEvents(partition, consumer, listener);
+
+        // onWindowAdvanced must be called with the MoveIn commit timestamp so that downstream
+        // CREATED partitions can use the processedTimestamp fallback immediately.
+        verify(listener).onWindowAdvanced(partition, commitTimestamp, null);
+
+        // onWindowAdvanced must happen strictly before onMoveIn so the sync context is
+        // updated before the partition enters its own wait state.
+        var order = inOrder(listener);
+        order.verify(listener).onWindowAdvanced(partition, commitTimestamp, null);
+        order.verify(listener).onMoveIn(partition, commitTimestamp, "00001", List.of("src1"));
     }
 
     @Test
