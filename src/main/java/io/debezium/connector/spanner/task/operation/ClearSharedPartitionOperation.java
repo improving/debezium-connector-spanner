@@ -66,7 +66,7 @@ public class ClearSharedPartitionOperation implements Operation {
 
         Set<String> lowerUidActiveTokens = lowerUidActivePartitionTokens(taskSyncContext);
 
-        List<PartitionState> currentPartitions = currentTaskState.getPartitions();
+        List<PartitionState> currentPartitions = new ArrayList<>(currentTaskState.getPartitions());
         List<PartitionState> finalPartitions = new ArrayList<>(currentPartitions.size());
         boolean partitionsHealed = false;
 
