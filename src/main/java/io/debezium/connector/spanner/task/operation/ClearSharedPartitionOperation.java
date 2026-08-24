@@ -14,6 +14,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import io.debezium.connector.spanner.kafka.internal.model.PartitionState;
+import io.debezium.connector.spanner.kafka.internal.model.PartitionStateEnum;
 import io.debezium.connector.spanner.kafka.internal.model.TaskState;
 import io.debezium.connector.spanner.task.TaskSyncContext;
 
@@ -63,12 +64,33 @@ public class ClearSharedPartitionOperation implements Operation {
             }
         }
 
-        if (finalSharedList.size() != currentSharedList.size()) {
+        Set<String> lowerUidActiveTokens = lowerUidActivePartitionTokens(taskSyncContext);
+
+        List<PartitionState> currentPartitions = currentTaskState.getPartitions();
+        List<PartitionState> finalPartitions = new ArrayList<>(currentPartitions.size());
+        boolean partitionsHealed = false;
+
+        for (PartitionState p : currentPartitions) {
+            if (!PartitionStateEnum.FINISHED.equals(p.getState())
+                    && !PartitionStateEnum.REMOVED.equals(p.getState())
+                    && lowerUidActiveTokens.contains(p.getToken())) {
+                LOGGER.warn("Task {}, self-healing duplicate partition {} — a lower-UID task already owns it; marking REMOVED",
+                        taskSyncContext.getTaskUid(), p.getToken());
+                finalPartitions.add(p.toBuilder().state(PartitionStateEnum.REMOVED).build());
+                partitionsHealed = true;
+            }
+            else {
+                finalPartitions.add(p);
+            }
+        }
+
+        if (finalSharedList.size() != currentSharedList.size() || partitionsHealed) {
             this.isRequiredPublishSyncEvent = true;
         }
 
         return taskSyncContext.toBuilder().currentTaskState(currentTaskState.toBuilder()
                 .sharedPartitions(finalSharedList)
+                .partitions(finalPartitions)
                 .build()).build();
     }
 
@@ -83,6 +105,23 @@ public class ClearSharedPartitionOperation implements Operation {
                 .filter(ts -> ts.getTaskUid().compareTo(currentUid) < 0)
                 .flatMap(ts -> ts.getSharedPartitions().stream())
                 .anyMatch(p -> p.getToken().equals(token));
+    }
+
+    /**
+     * Returns the set of partition tokens actively owned (non-FINISHED, non-REMOVED) by tasks
+     * whose UID is lexicographically smaller than the current task's UID. Used to detect
+     * partitions-level duplicates created by the mutable key range race condition so the
+     * higher-UID task can yield.
+     */
+    private Set<String> lowerUidActivePartitionTokens(TaskSyncContext context) {
+        String currentUid = context.getCurrentTaskState().getTaskUid();
+        return context.getTaskStates().values().stream()
+                .filter(ts -> ts.getTaskUid().compareTo(currentUid) < 0)
+                .flatMap(ts -> ts.getPartitions().stream())
+                .filter(p -> !PartitionStateEnum.FINISHED.equals(p.getState())
+                        && !PartitionStateEnum.REMOVED.equals(p.getState()))
+                .map(PartitionState::getToken)
+                .collect(Collectors.toSet());
     }
 
     @Override
