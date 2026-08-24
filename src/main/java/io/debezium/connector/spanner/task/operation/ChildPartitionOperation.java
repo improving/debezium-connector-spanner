@@ -81,6 +81,7 @@ public class ChildPartitionOperation implements Operation {
                     .state(PartitionStateEnum.CREATED)
                     .parents(newPartition.getParentTokens())
                     .originParent(newPartition.getOriginPartitionToken())
+                    .tvfName(newPartition.getTvfName())
                     .build();
 
             if (taskSyncContext.getTaskUid().equals(taskUid)) {

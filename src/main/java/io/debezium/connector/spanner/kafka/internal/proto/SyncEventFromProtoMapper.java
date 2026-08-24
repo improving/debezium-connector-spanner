@@ -108,6 +108,10 @@ public class SyncEventFromProtoMapper {
                         ? partitionState.getLastBoundaryRecordSequence()
                         : null;
 
+        String tvfName = partitionState.getTvfName() != null && !partitionState.getTvfName().isEmpty()
+                ? partitionState.getTvfName()
+                : null;
+
         return new PartitionState(
                 partitionState.getToken(),
                 Timestamp.parseTimestamp(partitionState.getStartTimestamp()),
@@ -124,6 +128,7 @@ public class SyncEventFromProtoMapper {
                 moveInState,
                 moveOutStates,
                 processedTimestamp,
-                lastBoundaryRecordSequence);
+                lastBoundaryRecordSequence,
+                tvfName);
     }
 }

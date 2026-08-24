@@ -358,6 +358,10 @@ public class SpannerStreamingChangeEventSource implements CommittingRecordsStrea
                         .startTimestamp(startTimeStamp)
                         .endTimestamp(event.getMetadata().getPartitionEndTimestamp())
                         .originPartitionToken(event.getMetadata().getPartitionToken())
+                        // Per-placement TVF change streams: each placement TVF has its own independent
+                        // partition token space, so a child/destination partition must be queried using
+                        // the same TVF as the parent partition that discovered it.
+                        .tvfName(event.getMetadata().getTvfName())
                         .build();
             }).collect(Collectors.toList());
             childPartitionsToSend.addAll(partitions);

@@ -125,7 +125,7 @@ public class SpannerChangeStreamService {
         partitionEventListener.onRun(partition);
 
         LOGGER.info("Task: {}, Streaming {} from {} to {}", taskUid, token, partition.getStartTimestamp(), partition.getEndTimestamp());
-        try (ChangeStreamResultSet resultSet = changeStreamDao.streamQuery(token, partition.getStartTimestamp(),
+        try (ChangeStreamResultSet resultSet = changeStreamDao.streamQuery(token, partition.getTvfName(), partition.getStartTimestamp(),
                 partition.getEndTimestamp(), heartbeatMillis.toMillis())) {
 
             long start = now();
@@ -222,7 +222,7 @@ public class SpannerChangeStreamService {
             int partitionEventCountInWindow = 0;
             long lastEventWallMs = -1;
 
-            try (ChangeStreamResultSet resultSet = changeStreamDao.streamQuery(token, processedTimestamp,
+            try (ChangeStreamResultSet resultSet = changeStreamDao.streamQuery(token, partition.getTvfName(), processedTimestamp,
                     endTimestamp, heartbeatMillis.toMillis())) {
 
                 long start = now();

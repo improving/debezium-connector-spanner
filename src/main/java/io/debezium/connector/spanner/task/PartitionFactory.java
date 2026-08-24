@@ -7,6 +7,8 @@ package io.debezium.connector.spanner.task;
 
 import static org.slf4j.LoggerFactory.getLogger;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -35,9 +37,17 @@ public class PartitionFactory {
 
     private final MetricsEventPublisher metricsEventPublisher;
 
+    private final List<String> placementTvfNames;
+
     public PartitionFactory(PartitionOffsetProvider partitionOffsetProvider, MetricsEventPublisher metricsEventPublisher) {
+        this(partitionOffsetProvider, metricsEventPublisher, Collections.emptyList());
+    }
+
+    public PartitionFactory(PartitionOffsetProvider partitionOffsetProvider, MetricsEventPublisher metricsEventPublisher,
+                            List<String> placementTvfNames) {
         this.partitionOffsetProvider = partitionOffsetProvider;
         this.metricsEventPublisher = metricsEventPublisher;
+        this.placementTvfNames = placementTvfNames == null ? Collections.emptyList() : placementTvfNames;
     }
 
     public Partition initPartition(Timestamp startTime, Timestamp endTime) {
@@ -51,6 +61,36 @@ public class PartitionFactory {
         metricsEventPublisher.publishMetricEvent(PartitionOffsetLagMetricEvent.from(partition.getToken(), startTime));
 
         return partition;
+    }
+
+    /**
+     * Creates the root partition(s) to start streaming from. When the change stream is configured
+     * with {@code gcp.spanner.placement.tvf.names}, each placement TVF has its own independent
+     * partition token space on the Spanner side, so one root partition per configured TVF name is
+     * created here (each with a distinct token, see {@link InitialPartition#tokenFor(String)}), and
+     * every partition discovered afterwards inherits its parent's {@code tvfName} (see
+     * {@link Partition#getTvfName()}). Otherwise, a single root partition is created, matching the
+     * default (non per-placement-TVF) behavior.
+     */
+    public List<Partition> initPartitions(Timestamp startTime, Timestamp endTime) {
+        if (placementTvfNames.isEmpty()) {
+            return List.of(initPartition(startTime, endTime));
+        }
+
+        List<Partition> partitions = new ArrayList<>();
+        for (String tvfName : placementTvfNames) {
+            Partition partition = Partition.builder()
+                    .token(InitialPartition.tokenFor(tvfName))
+                    .parentTokens(Set.of())
+                    .startTimestamp(startTime)
+                    .endTimestamp(endTime)
+                    .tvfName(tvfName)
+                    .build();
+
+            metricsEventPublisher.publishMetricEvent(PartitionOffsetLagMetricEvent.from(partition.getToken(), startTime));
+            partitions.add(partition);
+        }
+        return partitions;
     }
 
     public Map<String, Partition> getPartitions(List<PartitionState> partitionStates) {
@@ -71,6 +111,7 @@ public class PartitionFactory {
                     .endTimestamp(partitionState.getEndTimestamp())
                     .parentTokens(partitionState.getParents())
                     .lastBoundaryRecordSequence(resolveLastBoundaryRecordSequence(partitionState))
+                    .tvfName(partitionState.getTvfName())
                     .build());
         }
         return partitionMap;
@@ -84,6 +125,7 @@ public class PartitionFactory {
                 .endTimestamp(partitionState.getEndTimestamp())
                 .parentTokens(partitionState.getParents())
                 .lastBoundaryRecordSequence(resolveLastBoundaryRecordSequence(partitionState))
+                .tvfName(partitionState.getTvfName())
                 .build();
     }
 
