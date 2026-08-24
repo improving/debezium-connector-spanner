@@ -14,6 +14,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import io.debezium.connector.spanner.kafka.internal.model.PartitionState;
+import io.debezium.connector.spanner.kafka.internal.model.PartitionStateEnum;
 import io.debezium.connector.spanner.kafka.internal.model.TaskState;
 import io.debezium.connector.spanner.task.TaskSyncContext;
 
@@ -47,19 +48,80 @@ public class ClearSharedPartitionOperation implements Operation {
                 LOGGER.info("Task {}, removing token {} since it is already owned by other tasks", taskSyncContext.getTaskUid(), sharedToken);
             }
 
+            // Mutable key range race: the same token can appear in multiple tasks' sharedPartitions
+            // simultaneously when several source partitions each emit a PartitionStartRecord for
+            // the same destination (empty parentTokens bypasses ConflictResolver). Break the tie
+            // deterministically: the task with the lexicographically smaller UID keeps its claim;
+            // the higher-UID task yields by removing its own sharedPartitions entry.
+            else if (isClaimedByLowerUidTask(taskSyncContext, sharedToken.getToken())) {
+                LOGGER.warn("Task {}, removing duplicate shared partition {} — another task with lower UID has already claimed it",
+                        taskSyncContext.getTaskUid(), sharedToken.getToken());
+            }
+
             else {
                 // This token is not owned by other tasks, nor is it shared to a dead task.
                 finalSharedList.add(sharedToken);
             }
         }
 
-        if (finalSharedList.size() != currentSharedList.size()) {
+        Set<String> lowerUidActiveTokens = lowerUidActivePartitionTokens(taskSyncContext);
+
+        List<PartitionState> currentPartitions = new ArrayList<>(currentTaskState.getPartitions());
+        List<PartitionState> finalPartitions = new ArrayList<>(currentPartitions.size());
+        boolean partitionsHealed = false;
+
+        for (PartitionState p : currentPartitions) {
+            if (!PartitionStateEnum.FINISHED.equals(p.getState())
+                    && !PartitionStateEnum.REMOVED.equals(p.getState())
+                    && lowerUidActiveTokens.contains(p.getToken())) {
+                LOGGER.warn("Task {}, self-healing duplicate partition {} — a lower-UID task already owns it; marking REMOVED",
+                        taskSyncContext.getTaskUid(), p.getToken());
+                finalPartitions.add(p.toBuilder().state(PartitionStateEnum.REMOVED).build());
+                partitionsHealed = true;
+            }
+            else {
+                finalPartitions.add(p);
+            }
+        }
+
+        if (finalSharedList.size() != currentSharedList.size() || partitionsHealed) {
             this.isRequiredPublishSyncEvent = true;
         }
 
         return taskSyncContext.toBuilder().currentTaskState(currentTaskState.toBuilder()
                 .sharedPartitions(finalSharedList)
+                .partitions(finalPartitions)
                 .build()).build();
+    }
+
+    /**
+     * Returns true if any other task whose UID is lexicographically smaller than the current task's
+     * UID has the given token in its {@code sharedPartitions}. Used to break ties when multiple
+     * tasks claim the same token simultaneously (mutable key range race condition).
+     */
+    private boolean isClaimedByLowerUidTask(TaskSyncContext context, String token) {
+        String currentUid = context.getCurrentTaskState().getTaskUid();
+        return context.getTaskStates().values().stream()
+                .filter(ts -> ts.getTaskUid().compareTo(currentUid) < 0)
+                .flatMap(ts -> ts.getSharedPartitions().stream())
+                .anyMatch(p -> p.getToken().equals(token));
+    }
+
+    /**
+     * Returns the set of partition tokens actively owned (non-FINISHED, non-REMOVED) by tasks
+     * whose UID is lexicographically smaller than the current task's UID. Used to detect
+     * partitions-level duplicates created by the mutable key range race condition so the
+     * higher-UID task can yield.
+     */
+    private Set<String> lowerUidActivePartitionTokens(TaskSyncContext context) {
+        String currentUid = context.getCurrentTaskState().getTaskUid();
+        return context.getTaskStates().values().stream()
+                .filter(ts -> ts.getTaskUid().compareTo(currentUid) < 0)
+                .flatMap(ts -> ts.getPartitions().stream())
+                .filter(p -> !PartitionStateEnum.FINISHED.equals(p.getState())
+                        && !PartitionStateEnum.REMOVED.equals(p.getState()))
+                .map(PartitionState::getToken)
+                .collect(Collectors.toSet());
     }
 
     @Override
