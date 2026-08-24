@@ -385,10 +385,9 @@ class SpannerChangeStreamServiceTest {
     }
 
     /**
-     * Verifies that onWindowAdvanced is called on every heartbeat inside the mutable streaming
-     * loop — not only at the end of a 20-minute window.  This allows the MoveIn ordering gate
-     * (sourceHasResumedThisMove) to unblock waiting CREATED partitions within heartbeatMillis
-     * instead of waiting up to N×20 minutes for chained window boundaries to close.
+     * Verifies that onWindowAdvanced is called inside the mutable streaming loop on a heartbeat
+     * event — not only at the end of the window boundary — so that the MoveIn ordering gate
+     * (sourceHasResumedThisMove) can unblock waiting CREATED partitions within heartbeatMillis.
      */
     @Test
     void testGetEventsMutableCallsOnWindowAdvancedOnHeartbeat() throws Exception {
@@ -422,8 +421,56 @@ class SpannerChangeStreamServiceTest {
         service.getEvents(partition, consumer, listener);
 
         // The heartbeat timestamp must have been published into the sync context immediately,
-        // without waiting for the 20-minute window boundary to close.
+        // without waiting for the window boundary to close.
         verify(listener).onWindowAdvanced(partition, heartbeatTs, null);
+    }
+
+    /**
+     * Verifies that onWindowAdvanced is called inside the mutable streaming loop even for
+     * non-heartbeat (data record) events, throttled to heartbeatMillis.
+     *
+     * Spanner change streams only emit heartbeat events during idle periods.  In
+     * high-throughput partitions data records arrive continuously with no idle gaps, so the
+     * heartbeat-only version of the advancement logic left processedTimestamp frozen for the
+     * full window duration.  This caused a matching sawtooth in the low-watermark lag metric:
+     * downstream CREATED partitions waited up to windowDuration before the
+     * sourceHasResumedThisMove fallback could unblock them.
+     */
+    @Test
+    void testGetEventsMutableCallsOnWindowAdvancedOnDataRecordBatch() throws Exception {
+        ChangeStreamDao changeStreamDao = mock(ChangeStreamDao.class);
+        ChangeStreamResultSet resultSet = mock(ChangeStreamResultSet.class);
+        ChangeStreamRecordMapper mapper = mock(ChangeStreamRecordMapper.class);
+        MetricsEventPublisher metricsEventPublisher = mock(MetricsEventPublisher.class);
+
+        when(changeStreamDao.isMutableKeyRange()).thenReturn(true);
+        when(changeStreamDao.streamQuery(any(), any(), any(), anyLong())).thenReturn(resultSet);
+        // One data event batch then end-of-stream.
+        when(resultSet.next()).thenReturn(true, false);
+
+        Timestamp start = Timestamp.ofTimeSecondsAndNanos(0, 0);
+        Timestamp dataTs = Timestamp.ofTimeSecondsAndNanos(30, 0);
+        StreamEventMetadata meta = StreamEventMetadata.newBuilder().withPartitionToken("token").build();
+        // Use a PartitionEndEvent as a convenient non-heartbeat ChangeStreamEvent with a timestamp.
+        PartitionEndEvent dataEvent = new PartitionEndEvent(dataTs, meta);
+        when(mapper.toChangeStreamEvents(any(), any(), any())).thenReturn(List.of(dataEvent));
+
+        // heartbeatMillis = 0 so the throttle is always exceeded.
+        SpannerChangeStreamService service = new SpannerChangeStreamService(
+                "TaskUid", changeStreamDao, mapper, Duration.ofMillis(0), metricsEventPublisher);
+
+        Timestamp end = Timestamp.ofTimeSecondsAndNanos(0, 0);
+        Partition partition = new Partition("token", new HashSet<>(), start, end, "origin");
+
+        ChangeStreamEventConsumer consumer = mock(ChangeStreamEventConsumer.class);
+        PartitionEventListener listener = mock(PartitionEventListener.class);
+        doNothing().when(listener).onRun(any());
+
+        service.getEvents(partition, consumer, listener);
+
+        // processedTimestamp must be advanced using the data event's timestamp, not deferred
+        // to the next window boundary.
+        verify(listener).onWindowAdvanced(partition, dataTs, null);
     }
 
     /**

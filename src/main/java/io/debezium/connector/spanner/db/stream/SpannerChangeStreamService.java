@@ -151,6 +151,10 @@ public class SpannerChangeStreamService {
         boolean isPartitionEnded = false;
         boolean isPartitionMoveInEvent = false;
         PartitionEventEvent moveInEvent = null;
+        // Wall-clock time of the last onWindowAdvanced call made inside the inner event
+        // loop (as opposed to the outer window-boundary call at line 256). Used to
+        // throttle sync-topic writes to at most one per heartbeatMillis interval.
+        long lastWindowAdvancedWallMs = 0L;
 
         while (!isPartitionEnded && !isPartitionMoveInEvent
                 && (partitionEndTimestamp == null || isBeforeOrEqual(processedTimestamp, partitionEndTimestamp))) {
@@ -191,21 +195,32 @@ public class SpannerChangeStreamService {
 
                     processEvents(partition, events, changeStreamEventConsumer);
 
-                    // Advance processedTimestamp in the sync context on every heartbeat so that
-                    // the MoveIn ordering gate (sourceHasResumedThisMove) resolves within
-                    // heartbeatMillis rather than waiting for a full 20-minute window to close.
+                    // Advance processedTimestamp in the sync context on every event batch,
+                    // throttled to at most one call per heartbeatMillis, so that downstream
+                    // CREATED partitions can use the processedTimestamp fallback in
+                    // sourceHasResumedThisMove within heartbeatMillis rather than waiting for
+                    // the full window duration.
                     //
-                    // Without this, when a partition's window is interrupted by a MoveIn event
-                    // the outer loop's onWindowAdvanced call is never reached, permanently
-                    // freezing processedTimestamp in the sync context. Downstream partitions in
-                    // CREATED state then wait N×20 minutes per chain link before they can resume.
+                    // The previous version of this block fired only on HeartbeatEvent. Spanner
+                    // change streams only emit heartbeats during idle periods, so in
+                    // high-throughput partitions (continuous data records, no idle gaps)
+                    // heartbeats never arrived and processedTimestamp advanced only at the
+                    // 5-minute window boundary. This produced a matching sawtooth in the
+                    // low-watermark lag metric: all downstream CREATED partitions stayed
+                    // blocked for a full window before the fallback could unblock them.
                     //
                     // The outer loop's local `processedTimestamp` variable is intentionally NOT
-                    // modified here — 20-minute window-boundary tracking is unaffected.
-                    if (!events.isEmpty() && events.get(0) instanceof HeartbeatEvent) {
-                        HeartbeatEvent heartbeat = (HeartbeatEvent) events.get(0);
-                        partitionEventListener.onWindowAdvanced(
-                                partition, heartbeat.getRecordTimestamp(), lastBoundaryRecordSequence);
+                    // modified here — window-boundary tracking is unaffected.
+                    if (!events.isEmpty()) {
+                        long nowMs = System.currentTimeMillis();
+                        if (nowMs - lastWindowAdvancedWallMs >= heartbeatMillis.toMillis()) {
+                            Timestamp latestEventTs = events.get(events.size() - 1).getRecordTimestamp();
+                            if (latestEventTs != null) {
+                                partitionEventListener.onWindowAdvanced(
+                                        partition, latestEventTs, lastBoundaryRecordSequence);
+                                lastWindowAdvancedWallMs = nowMs;
+                            }
+                        }
                     }
 
                     for (ChangeStreamEvent event : events) {
