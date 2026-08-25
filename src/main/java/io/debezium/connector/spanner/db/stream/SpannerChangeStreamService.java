@@ -22,6 +22,7 @@ import io.debezium.connector.spanner.db.model.InitialPartition;
 import io.debezium.connector.spanner.db.model.Partition;
 import io.debezium.connector.spanner.db.model.event.ChangeStreamEvent;
 import io.debezium.connector.spanner.db.model.event.ChildPartitionsEvent;
+import io.debezium.connector.spanner.db.model.event.DataChangeEvent;
 import io.debezium.connector.spanner.db.model.event.FinishPartitionEvent;
 import io.debezium.connector.spanner.db.model.event.HeartbeatEvent;
 import io.debezium.connector.spanner.db.model.event.PartitionEndEvent;
@@ -163,6 +164,15 @@ public class SpannerChangeStreamService {
                     : minTimestamp(partitionEndTimestamp, addMinutes(processedTimestamp, windowDuration));
             String newBoundaryRecordSequence = null;
 
+            // Diagnostic counters for this window iteration only, to make it possible to see
+            // directly from INFO-level logs whether Spanner ever emitted anything (heartbeat or
+            // data) for this partition during the window, rather than inferring it indirectly
+            // from offset timestamps after the fact. See the window-closed summary log below.
+            long windowStartWallMs = System.currentTimeMillis();
+            int dataEventCountInWindow = 0;
+            int heartbeatEventCountInWindow = 0;
+            long lastEventWallMs = -1;
+
             try (ChangeStreamResultSet resultSet = changeStreamDao.streamQuery(token, processedTimestamp,
                     endTimestamp, heartbeatMillis.toMillis())) {
 
@@ -176,6 +186,18 @@ public class SpannerChangeStreamService {
                     LOGGER.debug("Task: {}, Events receive from mutable stream: {}", taskUid, rawEvents);
 
                     List<ChangeStreamEvent> events = filterBoundaryDuplicates(rawEvents, processedTimestamp, lastBoundaryRecordSequence);
+
+                    if (!events.isEmpty()) {
+                        lastEventWallMs = System.currentTimeMillis();
+                        for (ChangeStreamEvent event : events) {
+                            if (event instanceof HeartbeatEvent) {
+                                heartbeatEventCountInWindow++;
+                            }
+                            else if (event instanceof DataChangeEvent) {
+                                dataEventCountInWindow++;
+                            }
+                        }
+                    }
 
                     if (!events.isEmpty() && (events.get(0) instanceof HeartbeatEvent)) {
                         var heartbeatEvent = (HeartbeatEvent) events.get(0);
@@ -252,6 +274,14 @@ public class SpannerChangeStreamService {
                 Thread.currentThread().interrupt();
                 break;
             }
+
+            LOGGER.info(
+                    "Task: {}, Window closed for partition {}: window=[{} -> {}], dataEvents={}, heartbeatEvents={}, "
+                            + "elapsedMs={}, msSinceLastEvent={}, closedByMoveIn={}",
+                    taskUid, token, processedTimestamp, endTimestamp, dataEventCountInWindow, heartbeatEventCountInWindow,
+                    System.currentTimeMillis() - windowStartWallMs,
+                    lastEventWallMs < 0 ? -1 : System.currentTimeMillis() - lastEventWallMs,
+                    isPartitionMoveInEvent);
 
             if (isPartitionMoveInEvent) {
                 break;
