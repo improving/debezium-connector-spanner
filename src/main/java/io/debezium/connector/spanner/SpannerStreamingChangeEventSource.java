@@ -390,6 +390,18 @@ public class SpannerStreamingChangeEventSource implements CommittingRecordsStrea
                 event.getPartitionToken(),
                 event.getCommitTimestamp(),
                 event.getDestinationPartitions());
+
+        // A partition under heavy MoveOut churn can emit thousands of these events per window with
+        // no DataChangeEvent/HeartbeatEvent in between (see SpannerChangeStreamService's per-window
+        // dataEvents/heartbeatEvents counters). Only those two event types previously advanced the
+        // Kafka Connect-committed offset, so this partition's offset — and the low watermark, which
+        // falls back to it when no fresher offset exists — stayed frozen at the window start despite
+        // real, continuous progress, only catching up once the outer window boundary closed (up to
+        // mutable.window.minutes late). Dispatch the MoveOut event's own commit timestamp the same
+        // way a heartbeat is dispatched so this progress is reflected immediately.
+        SpannerOffsetContext offsetContext = offsetContextFactory.getOffsetContextFromPartitionEventEvent(event);
+        SpannerPartition partition = new SpannerPartition(event.getPartitionToken());
+        spannerEventDispatcher.alwaysDispatchHeartbeatEvent(partition, offsetContext);
     }
 
     private void processFailure(Exception ex) {

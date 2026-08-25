@@ -171,6 +171,7 @@ public class SpannerChangeStreamService {
             long windowStartWallMs = System.currentTimeMillis();
             int dataEventCountInWindow = 0;
             int heartbeatEventCountInWindow = 0;
+            int partitionEventCountInWindow = 0;
             long lastEventWallMs = -1;
 
             try (ChangeStreamResultSet resultSet = changeStreamDao.streamQuery(token, processedTimestamp,
@@ -195,6 +196,13 @@ public class SpannerChangeStreamService {
                             }
                             else if (event instanceof DataChangeEvent) {
                                 dataEventCountInWindow++;
+                            }
+                            else if (event instanceof PartitionEventEvent) {
+                                // MoveIn/MoveOut split notifications. A source partition under heavy
+                                // MoveOut churn can emit thousands of these with zero DataChangeEvent
+                                // or HeartbeatEvent in between — counting them separately is what
+                                // revealed that "dataEvents=0" did not mean the partition was idle.
+                                partitionEventCountInWindow++;
                             }
                         }
                     }
@@ -277,8 +285,9 @@ public class SpannerChangeStreamService {
 
             LOGGER.info(
                     "Task: {}, Window closed for partition {}: window=[{} -> {}], dataEvents={}, heartbeatEvents={}, "
-                            + "elapsedMs={}, msSinceLastEvent={}, closedByMoveIn={}",
+                            + "partitionEvents={}, elapsedMs={}, msSinceLastEvent={}, closedByMoveIn={}",
                     taskUid, token, processedTimestamp, endTimestamp, dataEventCountInWindow, heartbeatEventCountInWindow,
+                    partitionEventCountInWindow,
                     System.currentTimeMillis() - windowStartWallMs,
                     lastEventWallMs < 0 ? -1 : System.currentTimeMillis() - lastEventWallMs,
                     isPartitionMoveInEvent);
