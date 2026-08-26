@@ -17,6 +17,7 @@ import com.google.cloud.Timestamp;
 
 import io.debezium.connector.spanner.db.dao.ChangeStreamDao;
 import io.debezium.connector.spanner.db.dao.ChangeStreamResultSet;
+import io.debezium.connector.spanner.db.dao.ChangeStreamResultSetMetadata;
 import io.debezium.connector.spanner.db.mapper.ChangeStreamRecordMapper;
 import io.debezium.connector.spanner.db.model.InitialPartition;
 import io.debezium.connector.spanner.db.model.Partition;
@@ -30,6 +31,7 @@ import io.debezium.connector.spanner.db.model.event.PartitionEventEvent;
 import io.debezium.connector.spanner.db.model.event.RecordSequenceUtils;
 import io.debezium.connector.spanner.metrics.MetricsEventPublisher;
 import io.debezium.connector.spanner.metrics.event.DelayChangeStreamEventsMetricEvent;
+import io.debezium.connector.spanner.metrics.event.MoveInLatencyMetricEvent;
 
 /**
  * This class queries the change stream, sends child partitions to SynchronizedPartitionManager,
@@ -152,6 +154,7 @@ public class SpannerChangeStreamService {
         boolean isPartitionEnded = false;
         boolean isPartitionMoveInEvent = false;
         PartitionEventEvent moveInEvent = null;
+        ChangeStreamResultSetMetadata moveInMetadata = null;
 
         while (!isPartitionEnded && !isPartitionMoveInEvent
                 && (partitionEndTimestamp == null || isBeforeOrEqual(processedTimestamp, partitionEndTimestamp))) {
@@ -177,9 +180,10 @@ public class SpannerChangeStreamService {
                 while (resultSet.next()) {
                     long delay = now() - start;
 
+                    ChangeStreamResultSetMetadata metadata = resultSet.getMetadata();
                     List<ChangeStreamEvent> rawEvents = changeStreamRecordMapper.toChangeStreamEvents(
                             partition,
-                            resultSet, resultSet.getMetadata());
+                            resultSet, metadata);
                     LOGGER.debug("Task: {}, Events receive from mutable stream: {}", taskUid, rawEvents);
 
                     List<ChangeStreamEvent> events = filterBoundaryDuplicates(rawEvents, processedTimestamp, lastBoundaryRecordSequence);
@@ -230,6 +234,7 @@ public class SpannerChangeStreamService {
                             if (!partitionEventEvent.getSourcePartitions().isEmpty()) {
                                 isPartitionMoveInEvent = true;
                                 moveInEvent = partitionEventEvent;
+                                moveInMetadata = metadata;
                             }
                         }
                     }
@@ -281,6 +286,27 @@ public class SpannerChangeStreamService {
         if (isPartitionMoveInEvent && moveInEvent != null) {
             LOGGER.info("Task {}, Pausing mutable partition {} after MoveIn event at {}, seq {}, sources {}",
                     taskUid, partition, moveInEvent.getCommitTimestamp(), moveInEvent.getRecordSequence(), moveInEvent.getSourcePartitions());
+            if (moveInMetadata != null) {
+                long commitMs = millis(moveInEvent.getCommitTimestamp());
+                long queryStartedMs = millis(moveInMetadata.getQueryStartedAt());
+                long streamStartedMs = millis(moveInMetadata.getRecordStreamStartedAt());
+                long readAtMs = millis(moveInMetadata.getRecordReadAt());
+
+                long commitToQueryMs = queryStartedMs - commitMs;
+                long queryToStreamStartMs = streamStartedMs - queryStartedMs;
+                long streamStartToReadMs = readAtMs - streamStartedMs;
+                long commitToReadMs = readAtMs - commitMs;
+
+                LOGGER.info(
+                        "Task {}, MoveIn latency breakdown for partition {}: commitToQueryMs={} (staleness before we even asked), "
+                                + "queryToStreamStartMs={} (RPC/query setup), streamStartToReadMs={} (waited inside open stream), "
+                                + "commitToReadMs={} (total staleness at read time)",
+                        taskUid, partition.getToken(),
+                        commitToQueryMs, queryToStreamStartMs, streamStartToReadMs, commitToReadMs);
+
+                metricsEventPublisher.publishMetricEvent(
+                        new MoveInLatencyMetricEvent(commitToQueryMs, queryToStreamStartMs, streamStartToReadMs, commitToReadMs));
+            }
             partitionEventListener.onMoveIn(partition, moveInEvent.getCommitTimestamp(), moveInEvent.getRecordSequence(), moveInEvent.getSourcePartitions());
             return;
         }
@@ -314,6 +340,10 @@ public class SpannerChangeStreamService {
 
     private long now() {
         return Instant.now().toEpochMilli();
+    }
+
+    private long millis(Timestamp timestamp) {
+        return timestamp.toSqlTimestamp().toInstant().toEpochMilli();
     }
 
     private Timestamp addMinutes(Timestamp timestamp, Duration duration) {
