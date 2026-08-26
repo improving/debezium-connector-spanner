@@ -234,7 +234,7 @@ public class SpannerChangeStreamService {
                             if (!partitionEventEvent.getSourcePartitions().isEmpty()) {
                                 isPartitionMoveInEvent = true;
                                 moveInEvent = partitionEventEvent;
-                                moveInMetadata = metadata;
+                                moveInMetadata = resultSet.getMetadata();
                             }
                         }
                     }
