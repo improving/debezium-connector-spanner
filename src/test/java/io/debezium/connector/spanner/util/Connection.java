@@ -556,35 +556,36 @@ public class Connection {
     private String ToPostgresTypes(String value) {
         return value
                 // Arrays must be converted before their element types.
-                .replaceAll("\\bARRAY<STRING\\(MAX\\)>", "text[]")
-                .replaceAll("\\bARRAY<STRING\\((\\d+)\\)>", "varchar($1)[]")
+                .replaceAll("(?i)\\bARRAY<STRING\\(MAX\\)>", "text[]")
+                .replaceAll("(?i)\\bARRAY<STRING\\((\\d+)\\)>", "varchar($1)[]")
 
                 // Scalar types.
-                .replaceAll("\\bINT64\\b", "bigint")
-                .replaceAll("\\bFLOAT32\\b", "real")
-                .replaceAll("\\bFLOAT64\\b", "double precision")
-                .replaceAll("\\bSTRING\\(MAX\\)", "text")
-                .replaceAll("\\bSTRING\\((\\d+)\\)", "varchar($1)")
-                .replaceAll("\\bBOOL\\b", "boolean")
-                .replaceAll("\\bTIMESTAMP\\b", "timestamptz")
-                .replaceAll("\\bDATE\\b", "date")
-                .replaceAll("\\bBYTES\\(MAX\\)", "bytea")
-                .replaceAll("\\bBYTES\\((\\d+)\\)", "bytea")
-                .replaceAll("\\bNUMERIC\\b", "numeric")
-                .replaceAll("\\bJSON\\b", "jsonb");
+                .replaceAll("(?i)\\bINT64\\b", "bigint")
+                .replaceAll("(?i)\\bFLOAT32\\b", "real")
+                .replaceAll("(?i)\\bFLOAT64\\b", "double precision")
+                .replaceAll("(?i)\\bSTRING\\(MAX\\)", "text")
+                .replaceAll("(?i)\\bSTRING\\((\\d+)\\)", "varchar($1)")
+                .replaceAll("(?i)\\bBOOL\\b", "boolean")
+                .replaceAll("(?i)\\bTIMESTAMP\\b", "timestamptz")
+                .replaceAll("(?i)\\bDATE\\b", "date")
+                .replaceAll("(?i)\\bBYTES\\(MAX\\)", "bytea")
+                .replaceAll("(?i)\\bBYTES\\((\\d+)\\)", "bytea")
+                .replaceAll("(?i)\\bNUMERIC\\b", "numeric")
+                .replaceAll("(?i)\\bJSON\\b", "jsonb");
     }
 
     private String ToPostgresTableParams(String tableParams) {
         String result = tableParams;
 
-        // Remove GoogleSQL-specific ROW DELETION POLICY (not supported in the PostgreSQL dialect).
+        // Remove GoogleSQL-specific ROW DELETION POLICY
+        // (not supported in the PostgreSQL dialect).
         int rowDeletionPolicyIndex = result.indexOf(", ROW DELETION POLICY");
         if (rowDeletionPolicyIndex >= 0) {
             result = result.substring(0, rowDeletionPolicyIndex);
         }
 
         // INTERLEAVE IN PARENT is supported in the PostgreSQL dialect but goes after the
-        // closing parenthesis rather than as a trailing GoogleSQL clause alongside PRIMARY KEY.
+        // closing parenthesis rather than as a trailing clause alongside PRIMARY KEY.
         String interleaveClause = "";
         int interleaveIndex = result.indexOf(", INTERLEAVE IN PARENT");
         if (interleaveIndex >= 0) {
@@ -602,7 +603,7 @@ public class Connection {
 
         // Move PRIMARY KEY into the column definition.
         result = result.replaceFirst(
-                "\\)\\s*PRIMARY KEY\\s*\\(([^)]+)\\)\\s*$",
+                "(?i)\\)\\s*PRIMARY KEY\\s*\\(([^)]+)\\)\\s*$",
                 ", PRIMARY KEY ($1))");
 
         return result + interleaveClause;
