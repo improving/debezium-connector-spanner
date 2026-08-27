@@ -184,10 +184,16 @@ public class SpannerChangeStreamService {
         String lastBoundaryRecordSequence = partition.getLastBoundaryRecordSequence();
         boolean isPartitionEnded = false;
 
-        // Overflow fallback: set only when buffer capacity is exceeded.
+        // Overflow / interrupt-with-gate fallback: set when buffer capacity is exceeded
+        // or when the streaming thread is interrupted while a gate is active.
         boolean isPartitionMoveInEvent = false;
         PartitionEventEvent moveInEvent = null;
         ChangeStreamResultSetMetadata moveInMetadata = null;
+        // All source tokens accumulated across every MoveIn seen by the active gate.
+        // Non-null only in the overflow / interrupt-with-gate paths; used instead of
+        // moveInEvent.getSourcePartitions() so MoveInStateUpdateOperation records every
+        // source, not only those of the first MoveIn event.
+        List<String> moveInAllSources = null;
 
         // Buffer gate: non-null while the streaming thread is gating on a MoveIn event.
         // Persists across window iterations so the gate waits between result sets if needed.
@@ -306,12 +312,16 @@ public class SpannerChangeStreamService {
                                     }
                                     else if (gate.isFull()) {
                                         // Overflow: fall back to existing close/reopen path.
+                                        // Capture ALL accumulated sources (not just the first
+                                        // MoveIn's sources) so MoveInStateUpdateOperation waits
+                                        // for every source to confirm MoveOut.
                                         LOGGER.warn(
                                                 "Task {}, MoveIn buffer overflow ({} events) for partition {}, falling back to close/reopen path",
                                                 taskUid, gate.size(), token);
                                         isPartitionMoveInEvent = true;
                                         moveInEvent = gate.getFirstMoveInEvent();
                                         moveInMetadata = gate.getFirstMoveInMetadata();
+                                        moveInAllSources = gate.getAllSources();
                                         gate = null;
                                         innerBreak = true;
                                     }
@@ -350,12 +360,14 @@ public class SpannerChangeStreamService {
                                 gateIsFirst = true;
                             }
                             else if (gate.isFull()) {
+                                // Capture ALL accumulated sources before clearing the gate.
                                 LOGGER.warn(
                                         "Task {}, MoveIn buffer overflow ({} events) for partition {}, falling back to close/reopen path",
                                         taskUid, gate.size(), token);
                                 isPartitionMoveInEvent = true;
                                 moveInEvent = gate.getFirstMoveInEvent();
                                 moveInMetadata = gate.getFirstMoveInMetadata();
+                                moveInAllSources = gate.getAllSources();
                                 gate = null;
                                 innerBreak = true;
                                 break;
@@ -385,7 +397,26 @@ public class SpannerChangeStreamService {
             catch (InterruptedException ex) {
                 LOGGER.info("task {}, Interrupting streaming mutable partition task with token {}", this.taskUid, partition.getToken());
                 Thread.currentThread().interrupt();
-                gate = null;
+                if (gate != null) {
+                    // Gate is active — buffered events were not yet forwarded. Transitioning
+                    // to FINISHED here would lose those events permanently because FINISHED
+                    // partitions are never re-streamed. Instead, transition to the MoveIn-pause
+                    // state (CREATED) so the partition is re-scheduled on restart and re-reads
+                    // from processedTimestamp = T1, recovering all buffered events from Spanner.
+                    LOGGER.info(
+                            "Task {}, MoveIn gate active at interrupt for partition {} — transitioning to MoveIn-pause to preserve unflushed events",
+                            taskUid, partition.getToken());
+                    if (moveInEvent == null) {
+                        moveInEvent = gate.getFirstMoveInEvent();
+                        moveInMetadata = gate.getFirstMoveInMetadata();
+                    }
+                    moveInAllSources = gate.getAllSources();
+                    isPartitionMoveInEvent = true;
+                    gate = null;
+                }
+                else {
+                    gate = null;
+                }
                 break;
             }
 
@@ -424,6 +455,18 @@ public class SpannerChangeStreamService {
                     }
                 }
                 if (interrupted) {
+                    // Same reasoning as the result-set interrupt: do NOT transition to FINISHED
+                    // while there are unflushed events in the buffer. Transition to MoveIn-pause
+                    // (CREATED) instead so the partition is re-streamed from T1 on restart.
+                    LOGGER.info(
+                            "Task {}, Spin-wait interrupted for partition {} with active gate — transitioning to MoveIn-pause to preserve unflushed events",
+                            taskUid, partition.getToken());
+                    if (moveInEvent == null) {
+                        moveInEvent = gate.getFirstMoveInEvent();
+                        moveInMetadata = gate.getFirstMoveInMetadata();
+                    }
+                    moveInAllSources = gate.getAllSources();
+                    isPartitionMoveInEvent = true;
                     gate = null;
                     break;
                 }
@@ -433,6 +476,16 @@ public class SpannerChangeStreamService {
                 flushGate(gate, partition, changeStreamEventConsumer);
                 gate = null;
                 gateIsFirst = true;
+                // Immediately advance processedTimestamp in the sync topic so that a crash
+                // immediately after this flush does not cause the buffered events to be
+                // re-produced (duplicate records). The onWindowAdvanced() call at the bottom
+                // of the outer-while body runs again with the same values — that is harmless
+                // because BufferedPublisher coalesces the two produces within its 5ms window.
+                if (newBoundaryRecordSequence != null) {
+                    lastBoundaryRecordSequence = newBoundaryRecordSequence;
+                }
+                processedTimestamp = endTimestamp;
+                partitionEventListener.onWindowAdvanced(partition, processedTimestamp, lastBoundaryRecordSequence);
             }
 
             if (partitionEndTimestamp != null && processedTimestamp.equals(partitionEndTimestamp)) {
@@ -450,8 +503,14 @@ public class SpannerChangeStreamService {
         }
 
         if (isPartitionMoveInEvent && moveInEvent != null) {
-            LOGGER.info("Task {}, Pausing mutable partition {} after MoveIn event at {}, seq {}, sources {}",
-                    taskUid, partition, moveInEvent.getCommitTimestamp(), moveInEvent.getRecordSequence(), moveInEvent.getSourcePartitions());
+            // Use all accumulated sources when available (overflow / interrupt-with-gate paths),
+            // so MoveInStateUpdateOperation waits for every source, not only the first MoveIn's.
+            List<String> effectiveSources = (moveInAllSources != null && !moveInAllSources.isEmpty())
+                    ? moveInAllSources
+                    : moveInEvent.getSourcePartitions();
+            LOGGER.info("Task {}, Pausing mutable partition {} after MoveIn event at {}, seq {}, sources {} (effectiveSources={})",
+                    taskUid, partition, moveInEvent.getCommitTimestamp(), moveInEvent.getRecordSequence(),
+                    moveInEvent.getSourcePartitions(), effectiveSources);
             if (moveInMetadata != null) {
                 long commitMs = millis(moveInEvent.getCommitTimestamp());
                 long queryStartedMs = millis(moveInMetadata.getQueryStartedAt());
@@ -473,7 +532,7 @@ public class SpannerChangeStreamService {
                 metricsEventPublisher.publishMetricEvent(
                         new MoveInLatencyMetricEvent(commitToQueryMs, queryToStreamStartMs, streamStartToReadMs, commitToReadMs));
             }
-            partitionEventListener.onMoveIn(partition, moveInEvent.getCommitTimestamp(), moveInEvent.getRecordSequence(), moveInEvent.getSourcePartitions());
+            partitionEventListener.onMoveIn(partition, moveInEvent.getCommitTimestamp(), moveInEvent.getRecordSequence(), effectiveSources);
             return;
         }
 

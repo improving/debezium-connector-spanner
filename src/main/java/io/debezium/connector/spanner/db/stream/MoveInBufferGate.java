@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
 import com.google.cloud.Timestamp;
 
@@ -159,5 +160,20 @@ public class MoveInBufferGate {
     /** Metadata of the first MoveIn event; used for latency-metric logging on fallback. */
     public ChangeStreamResultSetMetadata getFirstMoveInMetadata() {
         return firstMoveInMetadata;
+    }
+
+    /**
+     * Returns the de-duplicated union of all source partition tokens accumulated across
+     * every MoveIn event seen while this gate was active.  Used by the overflow-fallback
+     * and interrupt-fallback paths so that {@code MoveInStateUpdateOperation} records
+     * <em>all</em> sources (not only those of the first MoveIn event), ensuring that
+     * {@code FindPartitionForStreamingOperation} waits for every source to confirm its
+     * MoveOut before allowing the destination partition to resume streaming.
+     */
+    public List<String> getAllSources() {
+        return sourcesByTimestamp.values().stream()
+                .flatMap(Set::stream)
+                .distinct()
+                .collect(Collectors.toList());
     }
 }
