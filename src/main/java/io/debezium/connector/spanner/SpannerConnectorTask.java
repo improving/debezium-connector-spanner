@@ -177,7 +177,12 @@ public class SpannerConnectorTask extends SpannerBaseSourceTask {
                 connectorConfig.getHeartbeatInterval(),
                 connectorConfig.getMaxMissedHeartbeats(),
                 connectorConfig.getMutableWindowMinutes(),
-                connectorConfig.isMutablePartitionOrderingEnabled());
+                connectorConfig.isMutablePartitionOrderingEnabled(),
+                // Supplier evaluated at call-time so it safely refers to synchronizationTaskContext
+                // even though that field is assigned after this line.
+                () -> this.synchronizationTaskContext.getTaskSyncContextHolder().get(),
+                connectorConfig.getMutableMoveInBufferMaxEvents(),
+                connectorConfig.getMutableMoveInGateCheckIntervalMs());
 
         final SourceInfoFactory sourceInfoFactory = new SourceInfoFactory(connectorConfig, lowWatermarkHolder);
 

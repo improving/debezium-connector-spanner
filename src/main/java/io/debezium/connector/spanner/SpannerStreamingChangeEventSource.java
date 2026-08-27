@@ -170,6 +170,19 @@ public class SpannerStreamingChangeEventSource implements CommittingRecordsStrea
                             partition.getToken(), commitTimestamp, recordSequence, sourcePartitionTokens);
                     partitionManager.notifyMoveIn(partition.getToken(), commitTimestamp, recordSequence, sourcePartitionTokens);
                 }
+
+                @Override
+                public void onMoveInPublishOnly(Partition partition, Timestamp commitTimestamp, String recordSequence,
+                                                List<String> sourcePartitionTokens, boolean isFirstMoveIn)
+                        throws InterruptedException {
+                    if (!connectorConfig.isMutablePartitionOrderingEnabled()) {
+                        return;
+                    }
+                    LOGGER.info("Partition onMoveInPublishOnly (buffer-gate): {}, commitTimestamp={}, recordSequence={}, sources={}, isFirst={}",
+                            partition.getToken(), commitTimestamp, recordSequence, sourcePartitionTokens, isFirstMoveIn);
+                    partitionManager.publishMoveInStateOnly(
+                            partition.getToken(), commitTimestamp, recordSequence, sourcePartitionTokens, isFirstMoveIn);
+                }
             });
 
         }

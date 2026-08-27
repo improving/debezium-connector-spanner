@@ -267,6 +267,15 @@ public class SynchronizationTaskContext {
 
     }
 
+    /**
+     * Returns the {@link TaskSyncContextHolder} so that components outside this class (e.g.
+     * {@link io.debezium.connector.spanner.db.stream.MoveInBufferGate}) can obtain a live,
+     * non-blocking snapshot of the current {@link TaskSyncContext}.
+     */
+    public TaskSyncContextHolder getTaskSyncContextHolder() {
+        return taskSyncContextHolder;
+    }
+
     public void publishEvent(TaskStateChangeEvent event) throws InterruptedException {
         LoggerUtils.debug(LOGGER, "publishEvent: type: {}, event: {}", event.getClass().getSimpleName(), event);
 

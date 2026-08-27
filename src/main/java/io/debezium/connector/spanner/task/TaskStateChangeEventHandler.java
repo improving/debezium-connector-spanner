@@ -32,11 +32,13 @@ import io.debezium.connector.spanner.task.operation.MoveInStateUpdateOperation;
 import io.debezium.connector.spanner.task.operation.MoveOutStateUpdateOperation;
 import io.debezium.connector.spanner.task.operation.Operation;
 import io.debezium.connector.spanner.task.operation.PartitionStatusUpdateOperation;
+import io.debezium.connector.spanner.task.operation.PublishMoveInStateOperation;
 import io.debezium.connector.spanner.task.operation.RemoveFinishedPartitionOperation;
 import io.debezium.connector.spanner.task.operation.TakePartitionForStreamingOperation;
 import io.debezium.connector.spanner.task.operation.TakeSharedPartitionOperation;
 import io.debezium.connector.spanner.task.operation.WindowAdvancedOperation;
 import io.debezium.connector.spanner.task.state.MoveInNotificationEvent;
+import io.debezium.connector.spanner.task.state.MoveInPublishOnlyEvent;
 import io.debezium.connector.spanner.task.state.MoveOutNotificationEvent;
 import io.debezium.connector.spanner.task.state.NewPartitionsEvent;
 import io.debezium.connector.spanner.task.state.PartitionStatusUpdateEvent;
@@ -171,6 +173,9 @@ public class TaskStateChangeEventHandler {
         else if (syncEvent instanceof MoveInNotificationEvent) {
             processEvent((MoveInNotificationEvent) syncEvent);
         }
+        else if (syncEvent instanceof MoveInPublishOnlyEvent) {
+            processEvent((MoveInPublishOnlyEvent) syncEvent);
+        }
         else if (syncEvent instanceof WindowAdvancedEvent) {
             processEvent((WindowAdvancedEvent) syncEvent);
         }
@@ -223,6 +228,16 @@ public class TaskStateChangeEventHandler {
                 new FindPartitionForStreamingOperation(changeStream.isMutableKeyRange()));
         // Blocking offset-fetch + stream-submission phase: offloaded to dedicated executor.
         schedulePendingPartitionsAsync();
+    }
+
+    private void processEvent(MoveInPublishOnlyEvent event) throws InterruptedException {
+        // Buffer-gate path: publish MoveInState to sync topic for cross-task visibility and
+        // crash-recovery. The partition does NOT transition to CREATED; the streaming thread
+        // stays alive and self-gates. No TakePartitionForStreamingOperation is needed.
+        performOperation(
+                new PublishMoveInStateOperation(
+                        event.getToken(), event.getCommitTimestamp(), event.getRecordSequence(),
+                        event.getSourcePartitionTokens(), event.isFirstMoveIn()));
     }
 
     private void processEvent(WindowAdvancedEvent event) throws InterruptedException {
