@@ -517,10 +517,10 @@ public class SpannerChangeStreamService {
                 long streamStartedMs = millis(moveInMetadata.getRecordStreamStartedAt());
                 long readAtMs = millis(moveInMetadata.getRecordReadAt());
 
-                long commitToQueryMs = queryStartedMs - commitMs;
-                long queryToStreamStartMs = streamStartedMs - queryStartedMs;
-                long streamStartToReadMs = readAtMs - streamStartedMs;
-                long commitToReadMs = readAtMs - commitMs;
+                long commitToQueryMs = Math.max(0L, queryStartedMs - commitMs);
+                long queryToStreamStartMs = Math.max(0L, streamStartedMs - Math.max(commitMs, queryStartedMs));
+                long streamStartToReadMs = Math.max(0L, readAtMs - Math.max(commitMs, streamStartedMs));
+                long commitToReadMs = Math.max(0L, readAtMs - commitMs);
 
                 LOGGER.info(
                         "Task {}, MoveIn latency breakdown for partition {}: commitToQueryMs={} (staleness before we even asked), "
