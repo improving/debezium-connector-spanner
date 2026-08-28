@@ -9,16 +9,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.source.SourceRecord;
-import org.junit.jupiter.api.Assumptions;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.MethodSource;
 import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import com.google.cloud.spanner.Dialect;
 
@@ -41,27 +36,15 @@ import io.debezium.connector.spanner.util.PartitionMode;
  * once, with the correct content, strictly ordered after the first write - i.e. the
  * recursive splitting happening underneath does not cause reordering, drops, or duplicate
  * delivery.
- *
- * <p>Parameterized across both partition modes and both dialects, but we are currently
- * only running the first combination of partition mode and dialect because all subsequent
- * combinations fail with {@code OUT_OF_RANGE: Specified start_timestamp is too far in the past}.
  */
-public class CrossPartitionSplitOrderingIT extends AbstractSpannerConnectorIT {
-
-    private static final Logger LOGGER = LoggerFactory.getLogger(CrossPartitionSplitOrderingIT.class);
+public class CrossPartitionSplitOrderingTestBase extends AbstractSpannerConnectorIT {
 
     private static final String tableNamePrefix = "cross_partition_split_ordering_table";
     private static final String changeStreamNamePrefix = "crossPartitionSplitOrderingStream";
 
-    @ParameterizedTest
-    @MethodSource("partitionModesAndDialects")
-    public void shouldDeliverFollowUpWriteExactlyOnceAndInOrderAcrossBackgroundPartitionSplits(PartitionMode partitionMode, Dialect dialect)
-            throws InterruptedException, ExecutionException {
-        Assumptions.assumeTrue(partitionMode == PartitionMode.IMMUTABLE_KEY_RANGE &&
-                dialect == Dialect.GOOGLE_STANDARD_SQL,
-                "Skipping: Only first parameterized test passes. All subsequent runs fail with "
-                        + "OUT_OF_RANGE: Specified start_timestamp is too far in the past.");
-        Connection connection = connectionFor(dialect, LOGGER);
+    public void shouldDeliverFollowUpWriteOnceInOrderAcrossBackgroundPartitionSplits(PartitionMode partitionMode, Dialect dialect, Logger logger)
+            throws InterruptedException {
+        Connection connection = connectionFor(dialect, logger);
         Configuration base = baseConfigFor(dialect);
         String table = tableFor(tableNamePrefix, partitionMode, dialect);
         String stream = streamFor(changeStreamNamePrefix, partitionMode, dialect);
