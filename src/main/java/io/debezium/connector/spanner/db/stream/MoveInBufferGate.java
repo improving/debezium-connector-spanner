@@ -5,6 +5,7 @@
  */
 package io.debezium.connector.spanner.db.stream;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -24,44 +25,75 @@ import io.debezium.connector.spanner.task.TaskSyncContext;
 
 /**
  * Per-partition buffer that accumulates {@link ChangeStreamEvent}s received after a MoveIn
- * boundary while the destination partition waits for all source partition(s) to confirm
+ * boundary while the destination partition waits for source partition(s) to confirm
  * their corresponding MoveOut event(s) via the sync topic.
+ *
+ * <p>Events are organised into <em>segments</em>, one per MoveIn event encountered.
+ * Each segment stores the MoveIn event itself as its header, plus all non-MoveIn
+ * events (data, heartbeats) that arrived from the Spanner stream after that MoveIn
+ * but before the next one.  Segments are held in arrival order and released from the
+ * head: {@link #drainConfirmedPrefix()} walks from the oldest segment and flushes each
+ * one whose specific source partitions have confirmed their MoveOut, stopping at the
+ * first unconfirmed segment.
+ *
+ * <p>This eliminates the convoy / head-of-line-blocking problem that a single
+ * all-or-nothing release across all accumulated MoveIn entries would cause: a slow or
+ * continuously re-splitting source can only delay its own segment, not earlier segments
+ * whose sources have already confirmed.
  *
  * <p>The underlying Spanner gRPC connection <em>stays open</em> throughout; events are
  * held here rather than being forwarded to the downstream blocking
- * {@link io.debezium.connector.spanner.StreamEventQueue}. When
- * {@link #isGateOpen()} returns {@code true} the caller drains the buffer with
- * {@link #drain()} and resumes normal forwarding on the same result set — no
- * reconnection or re-query to Spanner is needed.
- *
- * <p>A single gate instance may accumulate multiple consecutive MoveIn events (at the
- * same or later commit timestamps). The source-token set grows as new MoveIn records
- * arrive; every entry must individually be satisfied before the gate opens.
+ * {@link io.debezium.connector.spanner.StreamEventQueue}.  When {@link #isEmpty()}
+ * returns {@code true} all segments have been drained and the gate can be discarded.
  *
  * <p>When {@link #isFull()} returns {@code true} the caller must fall back to the
- * existing close/reopen path (the original MoveIn pause behaviour) and discard this
- * gate.  The {@link #getFirstMoveInEvent()} and {@link #getFirstMoveInMetadata()}
- * accessors supply the values needed for that fallback path.
+ * existing close/reopen path.  The {@link #getFirstMoveInEvent()} and
+ * {@link #getFirstMoveInMetadata()} accessors supply the values needed for that path.
  */
 public class MoveInBufferGate {
 
     /**
-     * Ordered map of moveInTimestamp → source-token set accumulated from all MoveIn
-     * events seen while this gate is active.  {@code LinkedHashMap} preserves insertion
-     * order so logging is deterministic.
+     * One segment per MoveIn event seen while this gate is active.
+     *
+     * <p>The MoveIn event is stored as the segment header and is forwarded to the
+     * downstream consumer when the segment is released (it is a no-op there, but
+     * must be forwarded to maintain the exact same event sequence as the original
+     * non-gate path).  Non-MoveIn events (data changes, heartbeats) that arrive after
+     * this MoveIn but before the next one are accumulated in {@code dataEvents}.
+     *
+     * <p>A segment is released when every source token in {@code sources} has
+     * confirmed its MoveOut via {@link MoveInGateChecker#canContinue} — independently
+     * of whether any later segment has confirmed.
      */
-    private final Map<Timestamp, Set<String>> sourcesByTimestamp = new LinkedHashMap<>();
+    private static final class Segment {
+        final Timestamp moveInTs;
+        final Set<String> sources;
+        final PartitionEventEvent moveInEvent;
+        final ChangeStreamResultSetMetadata moveInMetadata;
+        /** Non-MoveIn events that arrived after this MoveIn, in stream order. */
+        final List<ChangeStreamEvent> dataEvents = new ArrayList<>();
 
-    private final List<ChangeStreamEvent> buffer = new ArrayList<>();
+        Segment(Timestamp moveInTs, Set<String> sources,
+                PartitionEventEvent moveInEvent, ChangeStreamResultSetMetadata moveInMetadata) {
+            this.moveInTs = moveInTs;
+            this.sources = sources;
+            this.moveInEvent = moveInEvent;
+            this.moveInMetadata = moveInMetadata;
+        }
+    }
+
+    /**
+     * Ordered queue of segments: new segments appended at the tail by
+     * {@link #addMoveIn}; confirmed segments removed from the head by
+     * {@link #drainConfirmedPrefix}.  Using {@code ArrayDeque} gives O(1)
+     * head-removal, which is the hot path when events arrive faster than sources
+     * confirm.
+     */
+    private final ArrayDeque<Segment> segments = new ArrayDeque<>();
 
     private final String destToken;
     private final int maxBufferEvents;
     private final Supplier<TaskSyncContext> taskSyncContextSupplier;
-
-    /** First MoveIn event seen; kept for the overflow-fallback path. */
-    private PartitionEventEvent firstMoveInEvent;
-    /** Metadata of the first MoveIn event; used for latency-metric logging on fallback. */
-    private ChangeStreamResultSetMetadata firstMoveInMetadata;
 
     public MoveInBufferGate(String destToken, int maxBufferEvents,
                             Supplier<TaskSyncContext> taskSyncContextSupplier) {
@@ -71,108 +103,133 @@ public class MoveInBufferGate {
     }
 
     /**
-     * Records a MoveIn event. Must be called for <em>every</em> MoveIn event
-     * encountered while this gate is active, including the first one that created
-     * the gate.
+     * Opens a new segment for the given MoveIn event.  All subsequent
+     * {@link #addDataEvent} calls accumulate into this segment until the next
+     * {@code addMoveIn} call opens the next one.
      *
-     * @param ts          commit timestamp of the MoveIn event
+     * @param ts           commit timestamp of the MoveIn event
      * @param sourceTokens source partition tokens listed in the MoveIn record
-     * @param event       the raw {@link PartitionEventEvent} (stored for fallback use)
-     * @param metadata    result-set metadata at the time the event was read (stored for
-     *                    latency logging on the fallback path)
+     * @param event        the raw {@link PartitionEventEvent}
+     * @param metadata     result-set metadata at the time the event was read
      */
-    public void recordMoveIn(Timestamp ts, List<String> sourceTokens,
-                             PartitionEventEvent event, ChangeStreamResultSetMetadata metadata) {
-        sourcesByTimestamp.computeIfAbsent(ts, k -> new LinkedHashSet<>()).addAll(sourceTokens);
-        if (firstMoveInEvent == null) {
-            firstMoveInEvent = event;
-            firstMoveInMetadata = metadata;
+    public void addMoveIn(Timestamp ts, List<String> sourceTokens,
+                          PartitionEventEvent event, ChangeStreamResultSetMetadata metadata) {
+        Segment last = segments.peekLast();
+        if (last != null && last.moveInTs.equals(ts)) {
+            // Same commit timestamp: two source partitions merging into one destination.
+            // Coalesce into the existing segment so that all same-timestamp sources must
+            // confirm before the segment is released — preserving the ordering guarantee
+            // for the merged key range boundary.
+            last.sources.addAll(sourceTokens);
+        }
+        else {
+            segments.addLast(new Segment(ts, new LinkedHashSet<>(sourceTokens), event, metadata));
         }
     }
 
     /**
-     * Appends an event to the in-memory buffer.  Events are stored in the order
-     * they arrived from Spanner and will be forwarded to the downstream queue in that
-     * same order when the gate opens.
+     * Appends a non-MoveIn event (data change or heartbeat) to the current (latest)
+     * segment.  Must only be called after at least one {@link #addMoveIn} call.
      */
-    public void add(ChangeStreamEvent event) {
-        buffer.add(event);
+    public void addDataEvent(ChangeStreamEvent event) {
+        segments.peekLast().dataEvents.add(event);
     }
 
     /**
-     * Returns {@code true} when the buffer has reached its configured capacity limit.
+     * Returns {@code true} when all segments have been drained — there is nothing left
+     * to release and the gate can be discarded.
+     */
+    public boolean isEmpty() {
+        return segments.isEmpty();
+    }
+
+    /**
+     * Returns the total number of events held across all segments:
+     * one MoveIn event header per segment plus all accumulated data events.
+     */
+    public int size() {
+        int count = segments.size(); // one MoveIn event per segment header
+        for (Segment seg : segments) {
+            count += seg.dataEvents.size();
+        }
+        return count;
+    }
+
+    /**
+     * Returns {@code true} when the total buffered event count has reached capacity.
      * The caller must then fall back to the existing close/reopen path.
      */
     public boolean isFull() {
-        return buffer.size() >= maxBufferEvents;
-    }
-
-    /** Returns the number of events currently held in the buffer. */
-    public int size() {
-        return buffer.size();
+        return size() >= maxBufferEvents;
     }
 
     /**
-     * Checks — without blocking — whether all source partitions for every accumulated
-     * MoveIn entry have confirmed their MoveOut event.  Reads the
-     * {@link TaskSyncContext} snapshot non-blockingly from the injected supplier; the
-     * {@code TaskSyncContextHolder} uses an {@link java.util.concurrent.atomic.AtomicReference}
-     * so this call is wait-free.
+     * Walks segments from oldest to newest.  For each segment whose source partitions
+     * have all confirmed their MoveOut (checked via {@link MoveInGateChecker#canContinue}),
+     * collects its MoveIn event followed by its data events in arrival order, removes
+     * the segment, and continues to the next.  Stops at the first unconfirmed segment.
      *
-     * @return {@code true} if the destination partition may resume forwarding events
+     * <p>Returns all events from the confirmed prefix in arrival order.
+     * Returns an empty list when no prefix can yet be released.
+     *
+     * <p>The {@link TaskSyncContext} snapshot is read once per call via the injected
+     * {@link java.util.concurrent.atomic.AtomicReference}-backed supplier; the call is
+     * wait-free.
      */
-    public boolean isGateOpen() {
+    public List<ChangeStreamEvent> drainConfirmedPrefix() {
+        if (segments.isEmpty()) {
+            return List.of();
+        }
         TaskSyncContext ctx = taskSyncContextSupplier.get();
         Set<String> finished = MoveInGateChecker.getFinishedPartitions(ctx);
-        for (Map.Entry<Timestamp, Set<String>> entry : sourcesByTimestamp.entrySet()) {
-            Timestamp moveInTs = entry.getKey();
-            List<String> sources = new ArrayList<>(entry.getValue());
-            if (!MoveInGateChecker.canContinue(ctx, destToken, moveInTs, sources, finished)) {
-                return false;
+
+        List<ChangeStreamEvent> result = new ArrayList<>();
+        while (!segments.isEmpty()) {
+            Segment seg = segments.peekFirst();
+            if (!MoveInGateChecker.canContinue(ctx, destToken, seg.moveInTs,
+                    new ArrayList<>(seg.sources), finished)) {
+                break; // oldest segment not yet confirmed — stop here
             }
+            segments.pollFirst(); // remove confirmed head
+            result.add(seg.moveInEvent); // MoveIn event first (preserves stream order)
+            result.addAll(seg.dataEvents);
         }
-        return true;
+        return result;
     }
 
     /**
-     * Removes and returns all buffered events in arrival order. Must only be called
-     * after {@link #isGateOpen()} has returned {@code true}.
-     */
-    public List<ChangeStreamEvent> drain() {
-        List<ChangeStreamEvent> out = new ArrayList<>(buffer);
-        buffer.clear();
-        return out;
-    }
-
-    /**
-     * Returns an ordered snapshot of all (timestamp → sources) pairs accumulated by
-     * this gate, intended for logging.
+     * Returns an ordered snapshot of (timestamp → sources) for all remaining segments,
+     * intended for logging.
      */
     public Map<Timestamp, Set<String>> getSourcesByTimestamp() {
-        return new LinkedHashMap<>(sourcesByTimestamp);
+        Map<Timestamp, Set<String>> result = new LinkedHashMap<>();
+        for (Segment seg : segments) {
+            result.computeIfAbsent(seg.moveInTs, k -> new LinkedHashSet<>()).addAll(seg.sources);
+        }
+        return result;
     }
 
-    /** First MoveIn event seen; used by the overflow-fallback path. */
+    /** First MoveIn event in the oldest remaining segment; used by the overflow-fallback path. */
     public PartitionEventEvent getFirstMoveInEvent() {
-        return firstMoveInEvent;
+        Segment first = segments.peekFirst();
+        return first == null ? null : first.moveInEvent;
     }
 
-    /** Metadata of the first MoveIn event; used for latency-metric logging on fallback. */
+    /** Metadata of the oldest remaining MoveIn event; used for latency-metric logging on fallback. */
     public ChangeStreamResultSetMetadata getFirstMoveInMetadata() {
-        return firstMoveInMetadata;
+        Segment first = segments.peekFirst();
+        return first == null ? null : first.moveInMetadata;
     }
 
     /**
-     * Returns the de-duplicated union of all source partition tokens accumulated across
-     * every MoveIn event seen while this gate was active.  Used by the overflow-fallback
-     * and interrupt-fallback paths so that {@code MoveInStateUpdateOperation} records
-     * <em>all</em> sources (not only those of the first MoveIn event), ensuring that
-     * {@code FindPartitionForStreamingOperation} waits for every source to confirm its
-     * MoveOut before allowing the destination partition to resume streaming.
+     * Returns the de-duplicated union of all source partition tokens across every
+     * remaining segment.  Used by the overflow-fallback and interrupt-fallback paths
+     * so that {@code MoveInStateUpdateOperation} waits for every source, not only
+     * those of the first MoveIn event.
      */
     public List<String> getAllSources() {
-        return sourcesByTimestamp.values().stream()
-                .flatMap(Set::stream)
+        return segments.stream()
+                .flatMap(seg -> seg.sources.stream())
                 .distinct()
                 .collect(Collectors.toList());
     }

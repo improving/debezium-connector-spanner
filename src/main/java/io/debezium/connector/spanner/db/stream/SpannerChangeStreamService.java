@@ -292,8 +292,7 @@ public class SpannerChangeStreamService {
                                     else {
                                         isFirst = false;
                                     }
-                                    gate.recordMoveIn(pee.getCommitTimestamp(), pee.getSourcePartitions(), pee, metadata);
-                                    gate.add(event);
+                                    gate.addMoveIn(pee.getCommitTimestamp(), pee.getSourcePartitions(), pee, metadata);
                                     partitionEventListener.onMoveInPublishOnly(
                                             partition, pee.getCommitTimestamp(), pee.getRecordSequence(),
                                             pee.getSourcePartitions(), gateIsFirst && isFirst);
@@ -302,11 +301,16 @@ public class SpannerChangeStreamService {
                                         gateIsFirst = false;
                                     }
 
-                                    // Check immediately: source might already be confirmed.
-                                    if (gate.isGateOpen()) {
-                                        LOGGER.info("Task {}, MoveIn gate opened immediately for partition {} ({}), flushing {} events",
-                                                taskUid, token, gate.getSourcesByTimestamp(), gate.size());
-                                        flushGate(gate, partition, changeStreamEventConsumer);
+                                    // Drain confirmed prefix immediately: this MoveIn's source might already be confirmed.
+                                    List<ChangeStreamEvent> readyAfterMoveIn = gate.drainConfirmedPrefix();
+                                    if (!readyAfterMoveIn.isEmpty()) {
+                                        LOGGER.info("Task {}, MoveIn gate prefix flushed immediately for partition {} ({}), flushed={}, remaining={}",
+                                                taskUid, token, gate.getSourcesByTimestamp(), readyAfterMoveIn.size(), gate.size());
+                                        for (ChangeStreamEvent e : readyAfterMoveIn) {
+                                            changeStreamEventConsumer.acceptChangeStreamEvent(e);
+                                        }
+                                    }
+                                    if (gate.isEmpty()) {
                                         gate = null;
                                         gateIsFirst = true;
                                     }
@@ -348,14 +352,19 @@ public class SpannerChangeStreamService {
                         }
 
                         if (gate != null) {
-                            // Gate is active: buffer this non-MoveIn event.
-                            gate.add(event);
+                            // Gate is active: add this non-MoveIn event to the current segment.
+                            gate.addDataEvent(event);
 
-                            // Check gate after each event — AtomicReference read is wait-free.
-                            if (gate.isGateOpen()) {
-                                LOGGER.info("Task {}, MoveIn gate opened inline for partition {} ({}), flushing {} buffered events",
-                                        taskUid, token, gate.getSourcesByTimestamp(), gate.size());
-                                flushGate(gate, partition, changeStreamEventConsumer);
+                            // Drain confirmed prefix after each event — AtomicReference read is wait-free.
+                            List<ChangeStreamEvent> readyInline = gate.drainConfirmedPrefix();
+                            if (!readyInline.isEmpty()) {
+                                LOGGER.info("Task {}, MoveIn gate prefix flushed inline for partition {} ({}), flushed={}, remaining={}",
+                                        taskUid, token, gate.getSourcesByTimestamp(), readyInline.size(), gate.size());
+                                for (ChangeStreamEvent e : readyInline) {
+                                    changeStreamEventConsumer.acceptChangeStreamEvent(e);
+                                }
+                            }
+                            if (gate.isEmpty()) {
                                 gate = null;
                                 gateIsFirst = true;
                             }
@@ -441,17 +450,28 @@ public class SpannerChangeStreamService {
             // try-with-resources above.
             if (gate != null) {
                 Instant waitStart = Instant.now();
-                LOGGER.info("Task {}, Window ended with active MoveIn gate for partition {} ({}), spin-waiting for gate to open, buffered={}",
+                LOGGER.info("Task {}, Window ended with active MoveIn gate for partition {} ({}), draining incrementally, buffered={}",
                         taskUid, token, gate.getSourcesByTimestamp(), gate.size());
                 boolean interrupted = false;
-                while (!gate.isGateOpen()) {
-                    try {
-                        Thread.sleep(moveInGateCheckIntervalMs);
+                while (!gate.isEmpty()) {
+                    List<ChangeStreamEvent> readySpinWait = gate.drainConfirmedPrefix();
+                    if (!readySpinWait.isEmpty()) {
+                        long elapsedMs = Duration.between(waitStart, Instant.now()).toMillis();
+                        LOGGER.info("Task {}, MoveIn gate prefix flushed after {}ms for partition {} ({}), flushed={}, remaining={}",
+                                taskUid, elapsedMs, token, gate.getSourcesByTimestamp(), readySpinWait.size(), gate.size());
+                        for (ChangeStreamEvent e : readySpinWait) {
+                            changeStreamEventConsumer.acceptChangeStreamEvent(e);
+                        }
                     }
-                    catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        interrupted = true;
-                        break;
+                    else {
+                        try {
+                            Thread.sleep(moveInGateCheckIntervalMs);
+                        }
+                        catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            interrupted = true;
+                            break;
+                        }
                     }
                 }
                 if (interrupted) {
@@ -471,9 +491,8 @@ public class SpannerChangeStreamService {
                     break;
                 }
                 long waitMs = Duration.between(waitStart, Instant.now()).toMillis();
-                LOGGER.info("Task {}, MoveIn gate opened after {}ms for partition {} ({}), flushing {} buffered events",
-                        taskUid, waitMs, token, gate.getSourcesByTimestamp(), gate.size());
-                flushGate(gate, partition, changeStreamEventConsumer);
+                LOGGER.info("Task {}, MoveIn gate fully drained after {}ms for partition {}",
+                        taskUid, waitMs, token);
                 gate = null;
                 gateIsFirst = true;
                 // Immediately advance processedTimestamp in the sync topic so that a crash
@@ -540,19 +559,6 @@ public class SpannerChangeStreamService {
         LOGGER.info("Task {}, Finished consuming mutable partition {}", taskUid, partition);
 
         changeStreamEventConsumer.acceptChangeStreamEvent(new FinishPartitionEvent(partition));
-    }
-
-    /**
-     * Forwards all events drained from the gate to the downstream consumer in arrival order.
-     */
-    private void flushGate(MoveInBufferGate gate, Partition partition,
-                           ChangeStreamEventConsumer changeStreamEventConsumer)
-            throws InterruptedException {
-        List<ChangeStreamEvent> buffered = gate.drain();
-        for (ChangeStreamEvent event : buffered) {
-            changeStreamEventConsumer.acceptChangeStreamEvent(event);
-        }
-        LOGGER.debug("Task {}, Flushed {} buffered events for partition {}", taskUid, buffered.size(), partition.getToken());
     }
 
     private List<ChangeStreamEvent> filterBoundaryDuplicates(
