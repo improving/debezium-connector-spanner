@@ -180,16 +180,15 @@ Spanner doesn't do (real Spanner splits based on load, not a fixed schedule). Th
 timer-driven splitting is used on purpose here to get a churning partition topology "for free"
 without needing to force a split manually.
 
-**`shouldDeliverFollowUpWriteExactlyOnceAndInOrderAcrossBackgroundPartitionSplits`**
-Parameterized across both partition modes and both dialects, but only `IMMUTABLE_KEY_RANGE` 
-actually runs; `MUTABLE_KEY_RANGE` self-skips. Inserts a row, then waits 45 seconds - 
+**`shouldDeliverFollowUpWriteOnceInOrderAcrossBackgroundPartitionSplits`**
+Parameterized across both partition modes and both dialects. Inserts a row, then waits 45 seconds - 
 long enough for the Spanner emulator's own timer-driven background partition splitting to run 
 through several generations of splits on its own, with no forced split needed - then updates 
 that row. Confirms exactly one insert and one update are delivered (no duplicates or drops from 
 the row's key range having moved across several partition generations), and that the update's
 timestamp is strictly later than the insert's.
 
-`MUTABLE_KEY_RANGE` self-skips - see Known Issues #2 below for the full explanation.
+Needed to be split into four separate test classes for each Partition Mode / Dialect combo: `CrossPartitionSplitOrderingIkrGoogleSqlIT`, `CrossPartitionSplitOrderingIkrPostgresqlIT`, `CrossPartitionSplitOrderingMkrGoogleSqlIT`, `CrossPartitionSplitOrderingMkrPostgresqlIT` - see Known Issues #2 below for the full explanation.
 
 ## `DataTypesIT`
 
@@ -449,7 +448,7 @@ This surfaces differently depending on `value_capture_type`:
 The following test scenarios are affected:
 
 | Test | Partition mode(s) | Dialect | Backend |
-|---|---|---|
+|---|---|---|---|
 | `ChangeStreamCorrectContentIT.shouldCarryUnchangedColumnsThroughOnPartialUpdate` | `IMMUTABLE_KEY_RANGE`, `MUTABLE_KEY_RANGE` | `GOOGLE_STANDARD_SQL`, `POSTGRESQL` | Real Spanner |
 | `ChangeStreamValueCaptureTypeIT.shouldCaptureFullNewRowWithNoNonKeyOldValues` (`NEW_VALUES`) | `IMMUTABLE_KEY_RANGE`, `MUTABLE_KEY_RANGE` | `GOOGLE_STANDARD_SQL`, `POSTGRESQL` | | Real Spanner |
 | `ChangeStreamValueCaptureTypeIT.shouldCaptureFullRowOnBothSides` (`NEW_ROW_AND_OLD_VALUES`) | `IMMUTABLE_KEY_RANGE`, `MUTABLE_KEY_RANGE` | `GOOGLE_STANDARD_SQL`, `POSTGRESQL` | | Real Spanner |
@@ -457,15 +456,15 @@ The following test scenarios are affected:
 
 ### 2. OUT_OF_RANGE: Specified start_timestamp is too far in the past
 We are seeing `OUT_OF_RANGE: Specified start_timestamp is too far in the past` when running
-the `CrossPartitionSplitOrderingIT` tests. The first parameterized test will pass and then 
+the parameterized `CrossPartitionSplitOrderingIT` tests. The first parameterized test will pass and then 
 all subsequent combinations will fail with this error because the test is wrongfully influenced
-by timestamps created during the the previous test run. Presumably there is some shared JVM state
+by timestamps created during the previous test run. Presumably there is some shared JVM state
 causing this error.
-The following test scenarios are affected:
 
-| Test | Partition mode(s) | Dialect | Backend |
-|---|---|---|
-| `CrossPartitionSplitOrderingIT.shouldDeliverFollowUpWriteExactlyOnceAndInOrderAcrossBackgroundPartitionSplits` | `IMMUTABLE_KEY_RANGE`, `MUTABLE_KEY_RANGE` | `GOOGLE_STANDARD_SQL`, `POSTGRESQL` | Emulator, Real Spanner |
+To avoid running into this issue, we have split these tests into four separate test classes `CrossPartitionSplitOrderingIkrGoogleSqlIT`, `CrossPartitionSplitOrderingIkrPostgresqlIT`, `CrossPartitionSplitOrderingMkrGoogleSqlIT`, `CrossPartitionSplitOrderingMkrPostgresqlIT`.
+Once the issue is resolved, these tests should be recombined into a single `CrossPartitionSplitOrderingIT` test class parameterized over partition mode and dialect.
+
+We are also seeing this issue for the parameterized tests `BasicSanityCheckIT`, `GracefulRestartIT`, and `KafkaTopicPartitionIT`. These tests have also been split into separate test classes and should be recombined again into a single parameterized test class once the issue is resolved.
 
 ### 3. restart/resume redelivers content instead of exactly once
 
@@ -496,7 +495,7 @@ persisted offset accounts for a record delivered just before shutdown.
 The following test scenarios are affected:
 
 | Test | Partition mode(s) | Dialect | Backend |
-|---|---|---|
+|---|---|---|---|
 | `ChangeStreamOrderingAndTransactionalIT.shouldResumeWithoutDuplicatingOrLosingContentAcrossRestart` | `MUTABLE_KEY_RANGE` | `GOOGLE_STANDARD_SQL`, `POSTGRESQL` | Emulator |
 | `ChangeStreamOrderingAndTransactionalIT.shouldResumeWithoutDuplicatingOrLosingContentAcrossRestart` | `IMMUTABLE_KEY_RANGE`, `MUTABLE_KEY_RANGE` | `GOOGLE_STANDARD_SQL`, `POSTGRESQL` | Real Spanner |
 
@@ -509,5 +508,5 @@ observed record count. Passes everywhere, but isn't a confirmed proof of the fil
 The following test scenarios are affected:
 
 | Test | Partition mode(s) | Dialect | Backend |
-|---|---|---|
+|---|---|---|---|
 | `ExcludeTtlDeletesFilterIT.shouldFilterOutTtlDeletesButStillDeliverUserIssuedDeletes` | `IMMUTABLE_KEY_RANGE`, `MUTABLE_KEY_RANGE` | `GOOGLE_STANDARD_SQL`, `POSTGRESQL` |  Emulator, Real Spanner |

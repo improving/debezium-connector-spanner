@@ -12,10 +12,7 @@ import java.util.concurrent.TimeUnit;
 
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.source.SourceRecord;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
 import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import com.google.cloud.spanner.Dialect;
 
@@ -23,18 +20,13 @@ import io.debezium.config.Configuration;
 import io.debezium.connector.spanner.util.Connection;
 import io.debezium.connector.spanner.util.PartitionMode;
 
-@RealSpannerCompatible
-public class GracefulRestartIT extends AbstractSpannerConnectorIT {
-
-    private static final Logger LOGGER = LoggerFactory.getLogger(GracefulRestartIT.class);
+public class GracefulRestartTestBase extends AbstractSpannerConnectorIT {
 
     private static final String tablePrefix = "graceful_restart_tests_table";
     private static final String changeStreamPrefix = "gracefulRestartChangeStream";
 
-    @ParameterizedTest
-    @EnumSource(Dialect.class)
-    public void checkUpdatesStreamedToKafka(Dialect dialect) throws InterruptedException {
-        Connection connection = connectionFor(dialect, LOGGER);
+    public void checkUpdatesStreamedToKafka(Dialect dialect, Logger logger) throws InterruptedException {
+        Connection connection = connectionFor(dialect, logger);
         Configuration base = baseConfigFor(dialect);
         String table = tableFor(tablePrefix, null, dialect);
         String stream = streamFor(changeStreamPrefix, null, dialect);
