@@ -278,13 +278,21 @@ public class TaskStateChangeEventHandler {
                 // Clear the flag as soon as we start so that triggers arriving during the
                 // (potentially slow) offset fetch can enqueue one more task.
                 schedulingPending.set(false);
+                TaskSyncContext ctx = taskSyncContextHolder.get();
+                String taskUid = ctx != null ? ctx.getTaskUid() : "unknown";
                 try {
                     performOperation(new TakePartitionForStreamingOperation(changeStream, partitionFactory));
                 }
                 catch (InterruptedException e) {
-                    LOGGER.info("Task {}, partition scheduling thread interrupted",
-                            taskSyncContextHolder.get().getTaskUid());
+                    LOGGER.info("Task {}, partition scheduling thread interrupted", taskUid);
                     Thread.currentThread().interrupt();
+                }
+                catch (Throwable t) {
+                    LOGGER.error("Task {}, partition scheduling failed", taskUid, t);
+                    RuntimeException exception = t instanceof RuntimeException
+                            ? (RuntimeException) t
+                            : new SpannerConnectorException("Partition scheduling failed", t);
+                    errorHandler.accept(exception);
                 }
             });
         }

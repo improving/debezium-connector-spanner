@@ -7,6 +7,7 @@ package io.debezium.connector.spanner.task;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -15,6 +16,7 @@ import static org.mockito.Mockito.when;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.Test;
 
@@ -154,5 +156,51 @@ class TaskStateChangeEventHandlerTest {
         assertEquals(Set.of("dst"), updatedSource.getMoveOutStates().get(0).getDestPartitionTokens());
         assertEquals(PartitionStateEnum.SCHEDULED, updatedDest.getState(),
                 "destination partition must be found and scheduled for streaming after the async offset-fetch completes");
+    }
+
+    @Test
+    void testAsyncPartitionSchedulingReportsRuntimeException() throws InterruptedException {
+        Timestamp moveTimestamp = Timestamp.ofTimeSecondsAndNanos(1000, 0);
+        PartitionState destPartition = PartitionState.builder()
+                .token("dst")
+                .state(PartitionStateEnum.CREATED)
+                .parents(Set.of("src"))
+                .moveInState(new MoveInState(moveTimestamp, "00001", List.of("src")))
+                .build();
+        PartitionState sourcePartition = PartitionState.builder()
+                .token("src")
+                .state(PartitionStateEnum.RUNNING)
+                .parents(Set.of())
+                .build();
+        TaskSyncContext initialContext = TaskSyncContext.builder()
+                .taskUid("task-uid-1")
+                .currentTaskState(TaskState.builder()
+                        .taskUid("task-uid-1")
+                        .partitions(List.of(destPartition, sourcePartition))
+                        .sharedPartitions(List.of())
+                        .build())
+                .build();
+        TaskSyncContextHolder taskSyncContextHolder = new TaskSyncContextHolder(mock(MetricsEventPublisher.class));
+        taskSyncContextHolder.init(initialContext);
+
+        RuntimeException schedulingFailure = new RuntimeException("offset lookup failed");
+        PartitionFactory partitionFactory = mock(PartitionFactory.class);
+        when(partitionFactory.getPartitions(any())).thenThrow(schedulingFailure);
+        AtomicReference<RuntimeException> reportedFailure = new AtomicReference<>();
+        TaskStateChangeEventHandler handler = new TaskStateChangeEventHandler(
+                taskSyncContextHolder,
+                mock(TaskSyncPublisher.class),
+                mock(ChangeStream.class),
+                partitionFactory,
+                mock(io.debezium.connector.spanner.processor.SpannerEventDispatcher.class),
+                () -> {
+                },
+                mock(io.debezium.connector.spanner.SpannerConnectorConfig.class),
+                reportedFailure::set);
+
+        handler.processEvent(new MoveOutNotificationEvent("src", moveTimestamp, List.of("dst")));
+        handler.shutdown();
+
+        assertSame(schedulingFailure, reportedFailure.get());
     }
 }
