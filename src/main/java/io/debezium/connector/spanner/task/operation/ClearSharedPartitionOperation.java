@@ -43,21 +43,14 @@ public class ClearSharedPartitionOperation implements Operation {
 
         // Filter or reassign shared partitions that are currently owned or shared to dead tasks.
         for (PartitionState sharedToken : currentSharedList) {
-            // This token is owned by another task.
+            // This token is owned by another task (it has been moved into that task's partitions
+            // list, in any state including FINISHED). Only drop our sharedPartitions entry once
+            // the other task has actually taken ownership — never drop it while the competing
+            // task still only has a sharedPartitions claim, to avoid leaving the partition
+            // unstreamed if that task crashes before it starts.
             if (otherTokens.contains(sharedToken.getToken())) {
                 LOGGER.info("Task {}, removing token {} since it is already owned by other tasks", taskSyncContext.getTaskUid(), sharedToken);
             }
-
-            // Mutable key range race: the same token can appear in multiple tasks' sharedPartitions
-            // simultaneously when several source partitions each emit a PartitionStartRecord for
-            // the same destination (empty parentTokens bypasses ConflictResolver). Break the tie
-            // deterministically: the task with the lexicographically smaller UID keeps its claim;
-            // the higher-UID task yields by removing its own sharedPartitions entry.
-            else if (isClaimedByLowerUidTask(taskSyncContext, sharedToken.getToken())) {
-                LOGGER.warn("Task {}, removing duplicate shared partition {} — another task with lower UID has already claimed it",
-                        taskSyncContext.getTaskUid(), sharedToken.getToken());
-            }
-
             else {
                 // This token is not owned by other tasks, nor is it shared to a dead task.
                 finalSharedList.add(sharedToken);
@@ -92,19 +85,6 @@ public class ClearSharedPartitionOperation implements Operation {
                 .sharedPartitions(finalSharedList)
                 .partitions(finalPartitions)
                 .build()).build();
-    }
-
-    /**
-     * Returns true if any other task whose UID is lexicographically smaller than the current task's
-     * UID has the given token in its {@code sharedPartitions}. Used to break ties when multiple
-     * tasks claim the same token simultaneously (mutable key range race condition).
-     */
-    private boolean isClaimedByLowerUidTask(TaskSyncContext context, String token) {
-        String currentUid = context.getCurrentTaskState().getTaskUid();
-        return context.getTaskStates().values().stream()
-                .filter(ts -> ts.getTaskUid().compareTo(currentUid) < 0)
-                .flatMap(ts -> ts.getSharedPartitions().stream())
-                .anyMatch(p -> p.getToken().equals(token));
     }
 
     /**
