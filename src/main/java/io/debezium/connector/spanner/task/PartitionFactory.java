@@ -7,9 +7,11 @@ package io.debezium.connector.spanner.task;
 
 import static org.slf4j.LoggerFactory.getLogger;
 
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -97,6 +99,13 @@ public class PartitionFactory {
         return null;
     }
 
+    private static Timestamp getLatestTimestamp(Timestamp... timestamps) {
+        return Arrays.stream(timestamps)
+                .filter(Objects::nonNull)
+                .max(Timestamp::compareTo)
+                .orElse(null);
+    }
+
     private Timestamp resolveOffset(PartitionState partitionState, Timestamp offset) {
         Timestamp startTimestamp = partitionState.getStartTimestamp();
         Timestamp processedTimestamp = partitionState.getProcessedTimestamp();
@@ -106,21 +115,23 @@ public class PartitionFactory {
             offset = null;
         }
 
-        Timestamp startTime;
-        if (offset != null) {
-            startTime = offset;
+        // offset (Kafka Connect's committed offset) only advances when a record is emitted.
+        // processedTimestamp advances on every window close regardless of data volume. After a
+        // task rebalance the two can diverge, with offset lagging behind. Since Spanner's
+        // change-stream start bound is inclusive, resuming from the stale one would redeliver
+        // the last-emitted record, so take whichever of the three is furthest along.
+        Timestamp startTime = getLatestTimestamp(startTimestamp, processedTimestamp, offset);
+        if (offset != null && startTime.equals(offset)) {
             LOGGER.info("Resuming partition {} from committed offset {} (processedTimestamp={})",
                     partitionState.getToken(), offset, processedTimestamp);
         }
-        else if (processedTimestamp != null && processedTimestamp.compareTo(startTimestamp) > 0) {
-            LOGGER.info("Resuming partition {} from processedTimestamp {} (no committed offset found)",
-                    partitionState.getToken(), processedTimestamp);
-            startTime = processedTimestamp;
+        else if (processedTimestamp != null && startTime.equals(processedTimestamp)) {
+            LOGGER.info("Resuming partition {} from processedTimestamp {} (offset={})",
+                    partitionState.getToken(), processedTimestamp, offset);
         }
         else {
             LOGGER.info("No previous offset found, using startTimestamp {} for partition {}",
                     startTimestamp, partitionState.getToken());
-            startTime = startTimestamp;
         }
 
         if (partitionState.getMoveInState() != null) {
