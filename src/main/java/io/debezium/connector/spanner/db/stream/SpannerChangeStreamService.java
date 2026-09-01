@@ -186,6 +186,10 @@ public class SpannerChangeStreamService {
         // Overflow / interrupt-with-gate fallback: set when buffer capacity is exceeded
         // or when the streaming thread is interrupted while a gate is active.
         boolean isPartitionMoveInEvent = false;
+        // Interrupt flag is deferred until AFTER onMoveIn() completes. onMoveIn() eventually
+        // calls BlockingQueue.put() via lockInterruptibly(), which throws InterruptedException
+        // immediately if the flag is already set — causing the MoveIn notification to be lost.
+        boolean restoreInterruptAfterMoveIn = false;
         PartitionEventEvent moveInEvent = null;
         ChangeStreamResultSetMetadata moveInMetadata = null;
         // All source tokens accumulated across every MoveIn seen by the active gate.
@@ -404,8 +408,8 @@ public class SpannerChangeStreamService {
             }
             catch (InterruptedException ex) {
                 LOGGER.info("task {}, Interrupting streaming mutable partition task with token {}", this.taskUid, partition.getToken());
-                Thread.currentThread().interrupt();
                 if (gate != null) {
+                    restoreInterruptAfterMoveIn = true;
                     // Gate is active — buffered events were not yet forwarded. Transitioning
                     // to FINISHED here would lose those events permanently because FINISHED
                     // partitions are never re-streamed. Instead, transition to the MoveIn-pause
@@ -424,6 +428,7 @@ public class SpannerChangeStreamService {
                 }
                 else {
                     gate = null;
+                    Thread.currentThread().interrupt();
                 }
                 break;
             }
@@ -476,8 +481,8 @@ public class SpannerChangeStreamService {
                             Thread.sleep(moveInGateCheckIntervalMs);
                         }
                         catch (InterruptedException e) {
-                            Thread.currentThread().interrupt();
                             interrupted = true;
+                            restoreInterruptAfterMoveIn = true;
                             break;
                         }
                     }
@@ -561,7 +566,14 @@ public class SpannerChangeStreamService {
                 metricsEventPublisher.publishMetricEvent(
                         new MoveInLatencyMetricEvent(commitToQueryMs, queryToStreamStartMs, streamStartToReadMs, commitToReadMs));
             }
-            partitionEventListener.onMoveIn(partition, moveInEvent.getCommitTimestamp(), moveInEvent.getRecordSequence(), effectiveSources);
+            try {
+                partitionEventListener.onMoveIn(partition, moveInEvent.getCommitTimestamp(), moveInEvent.getRecordSequence(), effectiveSources);
+            }
+            finally {
+                if (restoreInterruptAfterMoveIn) {
+                    Thread.currentThread().interrupt();
+                }
+            }
             return;
         }
 
