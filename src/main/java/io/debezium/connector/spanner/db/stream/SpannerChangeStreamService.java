@@ -587,7 +587,7 @@ public class SpannerChangeStreamService {
     }
 
     private long millis(Timestamp timestamp) {
-        return timestamp.toSqlTimestamp().toInstant().toEpochMilli();
+        return timestamp == null ? 0L : timestamp.toSqlTimestamp().toInstant().toEpochMilli();
     }
 
     private Timestamp addMinutes(Timestamp timestamp, Duration duration) {
