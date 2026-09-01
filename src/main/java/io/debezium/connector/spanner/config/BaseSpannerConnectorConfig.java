@@ -151,6 +151,8 @@ public abstract class BaseSpannerConnectorConfig extends CommonConnectorConfig {
 
     private static final String MUTABLE_MOVE_IN_GATE_CHECK_INTERVAL_MS_PROPERTY_NAME = "gcp.spanner.mutable.move.in.gate.check.interval.ms";
 
+    private static final String MUTABLE_MOVE_IN_GATE_TIMEOUT_MS_PROPERTY_NAME = "gcp.spanner.mutable.move.in.gate.timeout.ms";
+
     public static final Field MUTABLE_PARTITION_ORDERING_ENABLED = Field.create(MUTABLE_PARTITION_ORDERING_ENABLED_PROPERTY_NAME)
             .withDisplayName("Mutable partition move-in/move-out ordering enabled")
             .withType(Type.BOOLEAN)
@@ -190,6 +192,16 @@ public abstract class BaseSpannerConnectorConfig extends CommonConnectorConfig {
             .withDefault(10)
             .withDescription("How often (in milliseconds) the streaming thread checks whether the MoveIn gate has "
                     + "opened when the Spanner result-set has been exhausted before the gate opened. Default 10 ms.");
+
+    public static final Field MUTABLE_MOVE_IN_GATE_TIMEOUT_MS = Field.create(MUTABLE_MOVE_IN_GATE_TIMEOUT_MS_PROPERTY_NAME)
+            .withDisplayName("MoveIn gate timeout (ms)")
+            .withType(Type.INT)
+            .withGroup(Field.createGroupEntry(Field.Group.CONNECTOR, 0))
+            .withWidth(Width.SHORT)
+            .withImportance(Importance.LOW)
+            .withDefault(60000)
+            .withDescription("Maximum time (in milliseconds) the streaming thread waits for an active MoveIn gate after "
+                    + "the Spanner result-set is exhausted before falling back to the close/reopen path. Default 60000 ms.");
 
     protected static final Field LOW_WATERMARK_ENABLED_FIELD = Field.create(LOW_WATERMARK_ENABLED)
             .withDisplayName(LOW_WATERMARK_ENABLED)
@@ -771,7 +783,8 @@ public abstract class BaseSpannerConnectorConfig extends CommonConnectorConfig {
                     MUTABLE_PARTITION_ORDERING_ENABLED,
                     MUTABLE_WINDOW_MINUTES,
                     MUTABLE_MOVE_IN_BUFFER_MAX_EVENTS,
-                    MUTABLE_MOVE_IN_GATE_CHECK_INTERVAL_MS)
+                    MUTABLE_MOVE_IN_GATE_CHECK_INTERVAL_MS,
+                    MUTABLE_MOVE_IN_GATE_TIMEOUT_MS)
             .events(TABLE_EXCLUDE_LIST,
                     TABLE_INCLUDE_LIST,
                     CUSTOM_CONVERTERS,

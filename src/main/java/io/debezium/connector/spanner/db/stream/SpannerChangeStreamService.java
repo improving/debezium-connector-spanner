@@ -68,6 +68,13 @@ public class SpannerChangeStreamService {
      */
     private final int moveInGateCheckIntervalMs;
 
+    /**
+     * Maximum time (ms) the post-window spin-wait may block waiting for the MoveIn gate
+     * to drain before falling back to the close/reopen path. Configured via
+     * {@code gcp.spanner.mutable.move.in.gate.timeout.ms}.
+     */
+    private final int moveInGateTimeoutMs;
+
     public SpannerChangeStreamService(String taskUid, ChangeStreamDao changeStreamDao, ChangeStreamRecordMapper changeStreamRecordMapper,
                                       Duration heartbeatMillis, MetricsEventPublisher metricsEventPublisher) {
         this(taskUid, changeStreamDao, changeStreamRecordMapper, heartbeatMillis, metricsEventPublisher, 20);
@@ -75,32 +82,24 @@ public class SpannerChangeStreamService {
 
     public SpannerChangeStreamService(String taskUid, ChangeStreamDao changeStreamDao, ChangeStreamRecordMapper changeStreamRecordMapper,
                                       Duration heartbeatMillis, MetricsEventPublisher metricsEventPublisher, int windowMinutes) {
-        this(taskUid, changeStreamDao, changeStreamRecordMapper, heartbeatMillis, metricsEventPublisher, windowMinutes, true);
-    }
-
-    public SpannerChangeStreamService(String taskUid, ChangeStreamDao changeStreamDao, ChangeStreamRecordMapper changeStreamRecordMapper,
-                                      Duration heartbeatMillis, MetricsEventPublisher metricsEventPublisher, int windowMinutes,
-                                      boolean mutablePartitionOrderingEnabled) {
         this(taskUid, changeStreamDao, changeStreamRecordMapper, heartbeatMillis, metricsEventPublisher,
-                windowMinutes, mutablePartitionOrderingEnabled, null, 5000, 10);
+                windowMinutes, MutableStreamOptions.withDefaults());
     }
 
     public SpannerChangeStreamService(String taskUid, ChangeStreamDao changeStreamDao, ChangeStreamRecordMapper changeStreamRecordMapper,
                                       Duration heartbeatMillis, MetricsEventPublisher metricsEventPublisher, int windowMinutes,
-                                      boolean mutablePartitionOrderingEnabled,
-                                      Supplier<TaskSyncContext> taskSyncContextSupplier,
-                                      int moveInBufferMaxEvents,
-                                      int moveInGateCheckIntervalMs) {
+                                      MutableStreamOptions options) {
         this.changeStreamDao = changeStreamDao;
         this.changeStreamRecordMapper = changeStreamRecordMapper;
         this.heartbeatMillis = heartbeatMillis;
         this.metricsEventPublisher = metricsEventPublisher;
         this.taskUid = taskUid;
         this.windowDuration = Duration.ofMinutes(windowMinutes);
-        this.mutablePartitionOrderingEnabled = mutablePartitionOrderingEnabled;
-        this.taskSyncContextSupplier = taskSyncContextSupplier;
-        this.moveInBufferMaxEvents = moveInBufferMaxEvents;
-        this.moveInGateCheckIntervalMs = moveInGateCheckIntervalMs;
+        this.mutablePartitionOrderingEnabled = options.isOrderingEnabled();
+        this.taskSyncContextSupplier = options.getTaskSyncContextSupplier();
+        this.moveInBufferMaxEvents = options.getBufferMaxEvents();
+        this.moveInGateCheckIntervalMs = options.getGateCheckIntervalMs();
+        this.moveInGateTimeoutMs = options.getGateTimeoutMs();
     }
 
     public boolean isMutableKeyRange() {
@@ -453,6 +452,7 @@ public class SpannerChangeStreamService {
                 LOGGER.info("Task {}, Window ended with active MoveIn gate for partition {} ({}), draining incrementally, buffered={}",
                         taskUid, token, gate.getSourcesByTimestamp(), gate.size());
                 boolean interrupted = false;
+                boolean timedOut = false;
                 while (!gate.isEmpty()) {
                     List<ChangeStreamEvent> readySpinWait = gate.drainConfirmedPrefix();
                     if (!readySpinWait.isEmpty()) {
@@ -464,6 +464,14 @@ public class SpannerChangeStreamService {
                         }
                     }
                     else {
+                        long elapsedMs = Duration.between(waitStart, Instant.now()).toMillis();
+                        if (elapsedMs >= moveInGateTimeoutMs) {
+                            LOGGER.warn(
+                                    "Task {}, MoveIn gate timed out after {}ms for partition {}, falling back to close/reopen path",
+                                    taskUid, elapsedMs, partition.getToken());
+                            timedOut = true;
+                            break;
+                        }
                         try {
                             Thread.sleep(moveInGateCheckIntervalMs);
                         }
@@ -474,13 +482,15 @@ public class SpannerChangeStreamService {
                         }
                     }
                 }
-                if (interrupted) {
+                if (interrupted || timedOut) {
                     // Same reasoning as the result-set interrupt: do NOT transition to FINISHED
                     // while there are unflushed events in the buffer. Transition to MoveIn-pause
                     // (CREATED) instead so the partition is re-streamed from T1 on restart.
-                    LOGGER.info(
-                            "Task {}, Spin-wait interrupted for partition {} with active gate — transitioning to MoveIn-pause to preserve unflushed events",
-                            taskUid, partition.getToken());
+                    if (interrupted) {
+                        LOGGER.info(
+                                "Task {}, Spin-wait interrupted for partition {} with active gate — transitioning to MoveIn-pause to preserve unflushed events",
+                                taskUid, partition.getToken());
+                    }
                     if (moveInEvent == null) {
                         moveInEvent = gate.getFirstMoveInEvent();
                         moveInMetadata = gate.getFirstMoveInMetadata();
