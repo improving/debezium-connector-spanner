@@ -7,6 +7,7 @@ package io.debezium.connector.spanner.task.operation;
 
 import java.util.List;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import com.google.cloud.Timestamp;
 
@@ -67,13 +68,20 @@ public class PublishMoveInStateOperation implements Operation {
     public TaskSyncContext doOperation(TaskSyncContext taskSyncContext) {
         TaskState currentTaskState = taskSyncContext.getCurrentTaskState();
 
-        MoveInState newMoveInState = new MoveInState(commitTimestamp, recordSequence, sourcePartitionTokens);
-
         List<PartitionState> updatedPartitions = currentTaskState.getPartitions().stream()
                 .map(partitionState -> {
                     if (!partitionState.getToken().equals(token)) {
                         return partitionState;
                     }
+                    List<String> effectiveSourcePartitionTokens = sourcePartitionTokens;
+                    MoveInState currentMoveInState = partitionState.getMoveInState();
+                    if (!isFirstMoveIn && currentMoveInState != null && commitTimestamp.equals(currentMoveInState.getTimestamp())) {
+                        effectiveSourcePartitionTokens = Stream.concat(
+                                currentMoveInState.getSourcePartitionTokens().stream(), sourcePartitionTokens.stream())
+                                .distinct()
+                                .collect(Collectors.toList());
+                    }
+                    MoveInState newMoveInState = new MoveInState(commitTimestamp, recordSequence, effectiveSourcePartitionTokens);
                     PartitionState.PartitionStateBuilder builder = partitionState.toBuilder()
                             .moveInState(newMoveInState);
                     if (isFirstMoveIn) {
