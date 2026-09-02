@@ -61,7 +61,7 @@ public class SyncEventFromProtoMapper {
         for (int i = 0; i < protoState.getPartitionsCount(); i++) {
             var protoPartition = protoState.getPartitions(i);
             var partition = mapPartition(protoPartition);
-            partitions.put(partition.getToken(), partition);
+            partitions.put(partition.getIdentity(), partition);
         }
 
         return partitions;
@@ -73,7 +73,7 @@ public class SyncEventFromProtoMapper {
         for (int i = 0; i < protoState.getSharedPartitionsCount(); i++) {
             var protoPartition = protoState.getSharedPartitions(i);
             var partition = mapPartition(protoPartition);
-            partitions.put(partition.getToken(), partition);
+            partitions.put(partition.getIdentity(), partition);
         }
 
         return partitions;

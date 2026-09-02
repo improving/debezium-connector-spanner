@@ -60,12 +60,12 @@ public class TaskState {
         }
 
         public TaskState.TaskStateBuilder partitions(final List<PartitionState> partitions) {
-            this.partitions = partitions.stream().collect(Collectors.toMap(PartitionState::getToken, Function.identity()));
+            this.partitions = partitions.stream().collect(Collectors.toMap(PartitionState::getIdentity, Function.identity()));
             return this;
         }
 
         public TaskState.TaskStateBuilder sharedPartitions(final List<PartitionState> sharedPartitions) {
-            this.sharedPartitions = sharedPartitions.stream().collect(Collectors.toMap(PartitionState::getToken, Function.identity()));
+            this.sharedPartitions = sharedPartitions.stream().collect(Collectors.toMap(PartitionState::getIdentity, Function.identity()));
             return this;
         }
 

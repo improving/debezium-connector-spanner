@@ -271,6 +271,10 @@ public class PartitionState implements Comparable<PartitionState> {
         return tvfName;
     }
 
+    public String getIdentity() {
+        return tvfName == null || tvfName.isBlank() ? token : token + "#" + tvfName;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {

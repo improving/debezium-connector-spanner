@@ -109,6 +109,57 @@ class SyncEventFromProtoMapperTest {
         assertThat(taskState2.getSharedPartitionsMap()).isEmpty();
     }
 
+    @Test
+    void testMapFromProtoPreservesSameTokenAcrossPlacementTvfs() {
+        SyncEventProtos.PartitionState us = SyncEventProtos.PartitionState.newBuilder()
+                .setToken("sameToken")
+                .setTvfName("READ_Stream_US")
+                .setStartTimestamp("1970-01-01T00:00:00Z")
+                .setState(SyncEventProtos.State.CREATED)
+                .build();
+        SyncEventProtos.PartitionState eu = SyncEventProtos.PartitionState.newBuilder()
+                .setToken("sameToken")
+                .setTvfName("READ_Stream_EU")
+                .setStartTimestamp("1970-01-01T00:00:00Z")
+                .setState(SyncEventProtos.State.CREATED)
+                .build();
+        SyncEventProtos.TaskState protoState = SyncEventProtos.TaskState.newBuilder()
+                .setTaskUid("task")
+                .addAllPartitions(List.of(us, eu))
+                .build();
+        SyncEventProtos.SyncEvent protoEvent = SyncEventProtos.SyncEvent.newBuilder()
+                .addTaskStates(protoState)
+                .build();
+
+        TaskState taskState = SyncEventFromProtoMapper.mapFromProto(protoEvent).getTaskStates().get("task");
+
+        assertThat(taskState.getPartitionsMap()).containsOnlyKeys(
+                "sameToken#READ_Stream_US", "sameToken#READ_Stream_EU");
+        assertThat(taskState.getPartitions()).extracting(PartitionState::getTvfName)
+                .containsExactlyInAnyOrder("READ_Stream_US", "READ_Stream_EU");
+    }
+
+    @Test
+    void testMapFromProtoKeepsLegacyTokenAsMapKey() {
+        SyncEventProtos.PartitionState partition = SyncEventProtos.PartitionState.newBuilder()
+                .setToken("legacyToken")
+                .setStartTimestamp("1970-01-01T00:00:00Z")
+                .setState(SyncEventProtos.State.CREATED)
+                .build();
+        SyncEventProtos.TaskState protoState = SyncEventProtos.TaskState.newBuilder()
+                .setTaskUid("task")
+                .addPartitions(partition)
+                .build();
+        SyncEventProtos.SyncEvent protoEvent = SyncEventProtos.SyncEvent.newBuilder()
+                .addTaskStates(protoState)
+                .build();
+
+        TaskState taskState = SyncEventFromProtoMapper.mapFromProto(protoEvent).getTaskStates().get("task");
+
+        assertThat(taskState.getPartitionsMap()).containsOnlyKeys("legacyToken");
+        assertThat(taskState.getPartitions().iterator().next().getTvfName()).isNull();
+    }
+
     private void assertPartition(PartitionState actual, SyncEventProtos.PartitionState expected, PartitionStateEnum partitionState) {
         assertThat(actual.getToken()).isEqualTo(expected.getToken());
         assertThat(actual.getParents()).containsExactlyInAnyOrderElementsOf(expected.getParentsList());

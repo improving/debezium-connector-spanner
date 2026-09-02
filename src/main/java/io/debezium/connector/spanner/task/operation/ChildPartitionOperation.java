@@ -11,6 +11,7 @@ import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Random;
 import java.util.Set;
@@ -64,7 +65,7 @@ public class ChildPartitionOperation implements Operation {
             List<PartitionState> partitions = new ArrayList<>(taskState.getPartitions());
             List<PartitionState> sharedPartitions = new ArrayList<>(taskState.getSharedPartitions());
 
-            if (existPartition(taskSyncContext, newPartition.getToken())) {
+            if (existPartition(taskSyncContext, newPartition.getToken(), newPartition.getTvfName())) {
                 LOGGER.warn("Partition {} already exists in tasks context", newPartition.getToken());
                 continue;
             }
@@ -102,31 +103,33 @@ public class ChildPartitionOperation implements Operation {
         return taskSyncContext;
     }
 
-    private boolean existPartition(TaskSyncContext taskSyncContext, String token) {
+    private boolean existPartition(TaskSyncContext taskSyncContext, String token, String tvfName) {
         boolean found = taskSyncContext.getCurrentTaskState().getPartitions().stream()
-                .anyMatch(partition -> token.equals(partition.getToken()));
+                .anyMatch(partition -> matches(partition, token, tvfName));
         if (found) {
             return true;
         }
 
         found = taskSyncContext.getCurrentTaskState().getSharedPartitions().stream()
-                .anyMatch(partition -> token.equals(partition.getToken()));
+                .anyMatch(partition -> matches(partition, token, tvfName));
         if (found) {
             return true;
         }
 
         found = taskSyncContext.getTaskStates().values().stream()
                 .flatMap(taskState -> taskState.getPartitions().stream())
-                .anyMatch(partition -> token.equals(partition.getToken()));
+                .anyMatch(partition -> matches(partition, token, tvfName));
         if (found) {
             return true;
         }
 
-        found = taskSyncContext.getTaskStates().values().stream()
+        return taskSyncContext.getTaskStates().values().stream()
                 .flatMap(taskState -> taskState.getSharedPartitions().stream())
-                .anyMatch(partition -> token.equals(partition.getToken()));
+                .anyMatch(partition -> matches(partition, token, tvfName));
+    }
 
-        return found;
+    private boolean matches(PartitionState partition, String token, String tvfName) {
+        return token.equals(partition.getToken()) && Objects.equals(tvfName, partition.getTvfName());
     }
 
     private String findCandidateToSharePartition(TaskSyncContext taskSyncContext) {
