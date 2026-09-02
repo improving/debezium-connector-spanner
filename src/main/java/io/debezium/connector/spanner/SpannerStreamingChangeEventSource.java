@@ -126,7 +126,7 @@ public class SpannerStreamingChangeEventSource implements CommittingRecordsStrea
                 @Override
                 public void onRun(Partition partition) throws InterruptedException {
                     finishingPartitionManager.registerPartition(partition.getToken());
-                    partitionManager.updateToRunning(partition.getToken());
+                    partitionManager.updateToRunning(partition.getToken(), partition.getTvfName());
                 }
 
                 @Override
@@ -139,7 +139,7 @@ public class SpannerStreamingChangeEventSource implements CommittingRecordsStrea
                     LOGGER.error("Try to stream again from partition {} after exception {}", partition.getToken(),
                             exception.getMessage());
 
-                    partitionManager.updateToReadyForStreaming(partition.getToken());
+                    partitionManager.updateToReadyForStreaming(partition.getToken(), partition.getTvfName());
                 }
 
                 @Override
@@ -156,7 +156,7 @@ public class SpannerStreamingChangeEventSource implements CommittingRecordsStrea
 
                 @Override
                 public void onWindowAdvanced(Partition partition, Timestamp windowEnd, String lastBoundaryRecordSequence) throws InterruptedException {
-                    partitionManager.updateProcessedTimestamp(partition.getToken(), windowEnd, lastBoundaryRecordSequence);
+                    partitionManager.updateProcessedTimestamp(partition.getToken(), partition.getTvfName(), windowEnd, lastBoundaryRecordSequence);
                 }
 
                 @Override

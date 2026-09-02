@@ -20,9 +20,21 @@ public interface PartitionManager {
 
     void updateToFinished(String token) throws InterruptedException;
 
+    default void updateToFinished(String token, String tvfName) throws InterruptedException {
+        updateToFinished(token);
+    }
+
     void updateToRunning(String token) throws InterruptedException;
 
+    default void updateToRunning(String token, String tvfName) throws InterruptedException {
+        updateToRunning(token);
+    }
+
     void updateToReadyForStreaming(String token) throws InterruptedException;
+
+    default void updateToReadyForStreaming(String token, String tvfName) throws InterruptedException {
+        updateToReadyForStreaming(token);
+    }
 
     void notifyMoveOut(String token, Timestamp commitTimestamp, List<String> destinationTokens) throws InterruptedException;
 
@@ -40,5 +52,11 @@ public interface PartitionManager {
             throws InterruptedException;
 
     void updateProcessedTimestamp(String token, Timestamp processedTimestamp, String lastBoundaryRecordSequence) throws InterruptedException;
+
+    default void updateProcessedTimestamp(String token, String tvfName, Timestamp processedTimestamp,
+                                          String lastBoundaryRecordSequence)
+            throws InterruptedException {
+        updateProcessedTimestamp(token, processedTimestamp, lastBoundaryRecordSequence);
+    }
 
 }

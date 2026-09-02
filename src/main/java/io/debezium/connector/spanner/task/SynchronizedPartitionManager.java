@@ -45,18 +45,32 @@ public class SynchronizedPartitionManager implements PartitionManager {
 
     @Override
     public void updateToFinished(String token) throws InterruptedException {
-        syncEventPublisher.accept(new PartitionStatusUpdateEvent(token, PartitionStateEnum.FINISHED));
+        updateToFinished(token, null);
+    }
+
+    @Override
+    public void updateToFinished(String token, String tvfName) throws InterruptedException {
+        syncEventPublisher.accept(new PartitionStatusUpdateEvent(token, tvfName, PartitionStateEnum.FINISHED));
     }
 
     @Override
     public void updateToRunning(String token) throws InterruptedException {
+        updateToRunning(token, null);
+    }
 
-        syncEventPublisher.accept(new PartitionStatusUpdateEvent(token, PartitionStateEnum.RUNNING));
+    @Override
+    public void updateToRunning(String token, String tvfName) throws InterruptedException {
+        syncEventPublisher.accept(new PartitionStatusUpdateEvent(token, tvfName, PartitionStateEnum.RUNNING));
     }
 
     @Override
     public void updateToReadyForStreaming(String token) throws InterruptedException {
-        syncEventPublisher.accept(new PartitionStatusUpdateEvent(token, PartitionStateEnum.READY_FOR_STREAMING));
+        updateToReadyForStreaming(token, null);
+    }
+
+    @Override
+    public void updateToReadyForStreaming(String token, String tvfName) throws InterruptedException {
+        syncEventPublisher.accept(new PartitionStatusUpdateEvent(token, tvfName, PartitionStateEnum.READY_FOR_STREAMING));
     }
 
     @Override
@@ -78,7 +92,14 @@ public class SynchronizedPartitionManager implements PartitionManager {
 
     @Override
     public void updateProcessedTimestamp(String token, Timestamp processedTimestamp, String lastBoundaryRecordSequence) throws InterruptedException {
-        syncEventPublisher.accept(new WindowAdvancedEvent(token, processedTimestamp, lastBoundaryRecordSequence));
+        updateProcessedTimestamp(token, null, processedTimestamp, lastBoundaryRecordSequence);
+    }
+
+    @Override
+    public void updateProcessedTimestamp(String token, String tvfName, Timestamp processedTimestamp,
+                                         String lastBoundaryRecordSequence)
+            throws InterruptedException {
+        syncEventPublisher.accept(new WindowAdvancedEvent(token, tvfName, processedTimestamp, lastBoundaryRecordSequence));
     }
 
 }
