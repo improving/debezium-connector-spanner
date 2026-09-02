@@ -15,6 +15,7 @@ import com.google.cloud.spanner.Options;
 
 import io.debezium.connector.spanner.db.dao.ChangeStreamDao;
 import io.debezium.connector.spanner.db.mapper.ChangeStreamRecordMapper;
+import io.debezium.connector.spanner.db.stream.MutableStreamOptions;
 import io.debezium.connector.spanner.db.stream.SpannerChangeStream;
 import io.debezium.connector.spanner.db.stream.SpannerChangeStreamService;
 import io.debezium.connector.spanner.metrics.MetricsEventPublisher;
@@ -44,12 +45,21 @@ public class SpannerChangeStreamFactory {
 
     public SpannerChangeStream getStream(
                                          String changeStreamName, Duration heartbeatMillis, int maxMissedHeartbeats, int windowMinutes) {
-        return getStream(changeStreamName, heartbeatMillis, maxMissedHeartbeats, windowMinutes, true);
+        return getStream(changeStreamName, heartbeatMillis, maxMissedHeartbeats, windowMinutes,
+                MutableStreamOptions.withDefaults());
     }
 
+    /**
+     * Full factory method that wires all mutable key range streaming options into the service.
+     *
+     * @param options controls ordering, the {@link io.debezium.connector.spanner.db.stream.MoveInBufferGate}
+     *                supplier, buffer capacity, and gate timeouts; use
+     *                {@link MutableStreamOptions#withDefaults()} for the conservative close/reopen path
+     *                or {@link MutableStreamOptions#of} to enable the buffer-gate optimisation.
+     */
     public SpannerChangeStream getStream(
                                          String changeStreamName, Duration heartbeatMillis, int maxMissedHeartbeats, int windowMinutes,
-                                         boolean mutablePartitionOrderingEnabled) {
+                                         MutableStreamOptions options) {
 
         ChangeStreamDao changeStreamDao = daoFactory.getStreamDao(
                 changeStreamName,
@@ -64,8 +74,8 @@ public class SpannerChangeStreamFactory {
                 databaseClientFactory.getDatabaseClient(), changeStreamDao.isMutableKeyRange());
 
         SpannerChangeStreamService streamService = new SpannerChangeStreamService(
-                taskUid, changeStreamDao, changeStreamRecordMapper, heartbeatMillis, metricsEventPublisher, windowMinutes,
-                mutablePartitionOrderingEnabled);
+                taskUid, changeStreamDao, changeStreamRecordMapper, heartbeatMillis, metricsEventPublisher,
+                windowMinutes, options);
 
         return new SpannerChangeStream(
                 streamService, metricsEventPublisher, heartbeatMillis, maxMissedHeartbeats, taskUid, databaseClientFactory);
