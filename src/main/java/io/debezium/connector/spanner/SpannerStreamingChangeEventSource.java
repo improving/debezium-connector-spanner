@@ -308,7 +308,7 @@ public class SpannerStreamingChangeEventSource implements CommittingRecordsStrea
 
         schemaRegistry.checkSchema(tableId, event.getCommitTimestamp(), event.getRowType());
 
-        SpannerPartition partition = new SpannerPartition(event.getPartitionToken());
+        SpannerPartition partition = new SpannerPartition(event.getPartitionToken(), event.getMetadata().getTvfName());
 
         for (Mod mod : event.getMods()) {
             SpannerOffsetContext offsetContext = offsetContextFactory.getOffsetContextFromDataChangeEvent(mod.getModNumber(), event);
@@ -332,7 +332,7 @@ public class SpannerStreamingChangeEventSource implements CommittingRecordsStrea
     private void processHeartBeatEvent(HeartbeatEvent event) throws InterruptedException {
         SpannerOffsetContext offsetContext = offsetContextFactory.getOffsetContextFromHeartbeatEvent(event);
 
-        SpannerPartition partition = new SpannerPartition(event.getMetadata().getPartitionToken());
+        SpannerPartition partition = new SpannerPartition(event.getMetadata().getPartitionToken(), event.getMetadata().getTvfName());
 
         spannerEventDispatcher.alwaysDispatchHeartbeatEvent(partition, offsetContext);
 
@@ -418,7 +418,7 @@ public class SpannerStreamingChangeEventSource implements CommittingRecordsStrea
         // mutable.window.minutes late). Dispatch the MoveOut event's own commit timestamp the same
         // way a heartbeat is dispatched so this progress is reflected immediately.
         SpannerOffsetContext offsetContext = offsetContextFactory.getOffsetContextFromPartitionEventEvent(event);
-        SpannerPartition partition = new SpannerPartition(event.getPartitionToken());
+        SpannerPartition partition = new SpannerPartition(event.getPartitionToken(), event.getMetadata().getTvfName());
         spannerEventDispatcher.alwaysDispatchHeartbeatEvent(partition, offsetContext);
     }
 

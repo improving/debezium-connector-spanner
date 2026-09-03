@@ -13,7 +13,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 
@@ -94,18 +93,14 @@ public class PartitionFactory {
     }
 
     public Map<String, Partition> getPartitions(List<PartitionState> partitionStates) {
-        List<String> tokens = partitionStates.stream()
-                .map(PartitionState::getToken)
-                .collect(Collectors.toList());
-
-        Map<String, Timestamp> offsets = partitionOffsetProvider.getOffsets(tokens);
+        Map<String, Timestamp> offsets = partitionOffsetProvider.getOffsets(partitionStates);
 
         Map<String, Partition> partitionMap = new HashMap<>();
         for (PartitionState partitionState : partitionStates) {
-            Timestamp offset = offsets.get(partitionState.getToken());
+            Timestamp offset = offsets.get(partitionState.getIdentity());
             Timestamp startTime = resolveOffset(partitionState, offset);
 
-            partitionMap.put(partitionState.getToken(), Partition.builder()
+            partitionMap.put(partitionState.getIdentity(), Partition.builder()
                     .token(partitionState.getToken())
                     .startTimestamp(startTime)
                     .endTimestamp(partitionState.getEndTimestamp())

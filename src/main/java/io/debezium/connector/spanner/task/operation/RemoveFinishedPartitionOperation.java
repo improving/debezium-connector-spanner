@@ -79,7 +79,7 @@ public class RemoveFinishedPartitionOperation implements Operation {
                                                 partitionState.getToken());
                                         PartitionOffset partitionOffset = new PartitionOffset();
                                         SpannerOffsetContext spannerOffsetContext = new SpannerOffsetContext(partitionOffset, new TransactionContext());
-                                        SpannerPartition partition = new SpannerPartition(partitionState.getToken());
+                                        SpannerPartition partition = new SpannerPartition(partitionState.getToken(), partitionState.getTvfName());
                                         try {
                                             spannerEventDispatcher.alwaysDispatchHeartbeatEvent(partition, spannerOffsetContext);
                                         }

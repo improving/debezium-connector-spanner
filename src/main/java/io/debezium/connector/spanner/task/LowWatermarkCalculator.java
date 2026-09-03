@@ -57,7 +57,7 @@ public class LowWatermarkCalculator {
                 .filter(
                         partitionState -> !partitionState.getState().equals(PartitionStateEnum.FINISHED)
                                 && !partitionState.getState().equals(PartitionStateEnum.REMOVED))
-                .collect(Collectors.groupingBy(PartitionState::getToken));
+                .collect(Collectors.groupingBy(PartitionState::getIdentity));
 
         Set<String> duplicatesInPartitions = checkDuplication(partitionsMap);
 
@@ -73,8 +73,8 @@ public class LowWatermarkCalculator {
 
         Map<String, List<PartitionState>> sharedPartitionsMap = taskSyncContext.getAllTaskStates().values().stream()
                 .flatMap(taskState -> taskState.getSharedPartitions().stream())
-                .filter(partitionState -> !partitions.containsKey(partitionState.getToken()))
-                .collect(Collectors.groupingBy(PartitionState::getToken));
+                .filter(partitionState -> !partitions.containsKey(partitionState.getIdentity()))
+                .collect(Collectors.groupingBy(PartitionState::getIdentity));
 
         Set<String> duplicatesInSharedPartitions = checkDuplication(sharedPartitionsMap);
         if (!duplicatesInSharedPartitions.isEmpty()) {
@@ -116,7 +116,7 @@ public class LowWatermarkCalculator {
         Map<String, Timestamp> offsets;
 
         try {
-            offsets = partitionOffsetProvider.getOffsets(allPartitions.keySet());
+            offsets = partitionOffsetProvider.getOffsets(allPartitions.values());
         }
         catch (ConnectException e) {
             if (e.getCause() != null && e.getCause() instanceof InterruptedException) {
@@ -154,7 +154,7 @@ public class LowWatermarkCalculator {
         return allPartitions.values().stream()
                 .map(
                         partitionState -> {
-                            Timestamp timestamp = offsets.get(partitionState.getToken());
+                            Timestamp timestamp = offsets.get(partitionState.getIdentity());
                             if (timestamp != null) {
                                 return timestamp;
                             }
@@ -176,20 +176,19 @@ public class LowWatermarkCalculator {
 
         allPartitions.values().forEach(
                 partitionState -> {
-                    Timestamp timestamp = offsets.get(partitionState.getToken());
+                    Timestamp timestamp = offsets.get(partitionState.getIdentity());
                     long acceptedLag = spannerConnectorConfig.getHeartbeatInterval().toMillis() + OFFSET_MONITORING_LAG_MAX_MS;
                     if (timestamp != null) {
-                        String token = partitionState.getToken();
                         long lag = now - timestamp.toDate().getTime();
                         if (lag > acceptedLag) {
-                            LOGGER.warn("Task {}, Partition has a very old offset, lag: {}, token: {}", taskSyncContextHolder.get().getTaskUid(), lag, partitionState);
+                            LOGGER.warn("Task {}, Partition has a very old offset, lag: {}, partition: {}", taskSyncContextHolder.get().getTaskUid(), lag,
+                                    partitionState);
                         }
                     }
                     else if (partitionState.getStartTimestamp() != null) {
-                        String token = partitionState.getToken();
                         long lag = now - partitionState.getStartTimestamp().toDate().getTime();
                         if (lag > acceptedLag) {
-                            LOGGER.warn("Task {}, Partition has a very old start time, lag: {}, token: {}", taskSyncContextHolder.get().getTaskUid(), lag,
+                            LOGGER.warn("Task {}, Partition has a very old start time, lag: {}, partition: {}", taskSyncContextHolder.get().getTaskUid(), lag,
                                     partitionState);
                         }
                     }

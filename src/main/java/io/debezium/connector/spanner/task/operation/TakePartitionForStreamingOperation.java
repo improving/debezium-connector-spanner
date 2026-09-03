@@ -59,9 +59,9 @@ public class TakePartitionForStreamingOperation implements Operation {
 
             toStreaming.forEach(partitionState -> {
                 LOGGER.info("Task {}, submitting the partition for streaming {}", taskSyncContext.getTaskUid(), partitionState);
-                Partition partition = partitionMap.get(partitionState.getToken());
+                Partition partition = partitionMap.get(partitionState.getIdentity());
                 if (partition != null && changeStream.submitPartition(partition)) {
-                    toSchedule.add(partitionState.getToken());
+                    toSchedule.add(partitionState.getIdentity());
                 }
                 else {
                     LOGGER.error("Task {}, failed to submit partition {} with state {}", taskSyncContext.getTaskUid(), partitionState,
@@ -72,7 +72,7 @@ public class TakePartitionForStreamingOperation implements Operation {
 
             List<PartitionState> partitions = taskState.getPartitions().stream()
                     .map(partitionState -> {
-                        if (toSchedule.contains(partitionState.getToken())) {
+                        if (toSchedule.contains(partitionState.getIdentity())) {
                             return partitionState.toBuilder()
                                     .state(PartitionStateEnum.SCHEDULED)
                                     .moveInState(null)
@@ -102,8 +102,8 @@ public class TakePartitionForStreamingOperation implements Operation {
         List<PartitionState> partitions = taskSyncContext.getCurrentTaskState().getPartitions().stream()
                 .map(partitionState -> {
                     if (partitionState.getState().equals(PartitionStateEnum.READY_FOR_STREAMING) &&
-                            isPartitionStreamingAlready(taskSyncContext.getTaskStates().values(), partitionState.getToken(), taskState.getTaskUid())) {
-                        LOGGER.info("Removing streaming partition {} with state {} since partition is already streaming", partitionState.getToken(),
+                            isPartitionStreamingAlready(taskSyncContext.getTaskStates().values(), partitionState, taskState.getTaskUid())) {
+                        LOGGER.info("Removing streaming partition {} with state {} since partition is already streaming", partitionState,
                                 partitionState.getState());
                         return null;
                     }
@@ -117,19 +117,20 @@ public class TakePartitionForStreamingOperation implements Operation {
                 .build();
     }
 
-    private boolean isPartitionStreamingAlready(Collection<TaskState> taskStates, String token, String taskUid) {
-        boolean isPartitionStreamingAlready = taskStates.stream().flatMap(taskState -> taskState.getPartitions().stream())
-                .filter(partitionState -> partitionState.getToken().equals(token))
+    private boolean isPartitionStreamingAlready(Collection<TaskState> taskStates, PartitionState target, String taskUid) {
+        String targetIdentity = target.getIdentity();
+        return taskStates.stream().flatMap(taskState -> taskState.getPartitions().stream())
+                .filter(partitionState -> partitionState.getIdentity().equals(targetIdentity))
                 .anyMatch(partitionState -> partitionState.getState().equals(PartitionStateEnum.SCHEDULED)
                         || partitionState.getState().equals(PartitionStateEnum.RUNNING)
                         || partitionState.getState().equals(PartitionStateEnum.FINISHED)
                         || partitionState.getState().equals(PartitionStateEnum.REMOVED));
-        return isPartitionStreamingAlready;
     }
 
-    private boolean isPartition(Collection<TaskState> taskStates, String token) {
+    private boolean isPartition(Collection<TaskState> taskStates, PartitionState target) {
+        String targetIdentity = target.getIdentity();
         return taskStates.stream().flatMap(taskState -> taskState.getPartitions().stream())
-                .filter(partitionState -> partitionState.getToken().equals(token))
+                .filter(partitionState -> partitionState.getIdentity().equals(targetIdentity))
                 .anyMatch(partitionState -> partitionState.getState().equals(PartitionStateEnum.SCHEDULED)
                         || partitionState.getState().equals(PartitionStateEnum.RUNNING)
                         || partitionState.getState().equals(PartitionStateEnum.FINISHED)

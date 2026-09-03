@@ -105,24 +105,30 @@ public class PartitionOffsetProvider {
         }
     }
 
-    public Timestamp getOffset(PartitionState token) {
-        Map<String, String> spannerPartition = new SpannerPartition(token.getToken()).getSourcePartition();
+    public Timestamp getOffset(PartitionState partitionState) {
+        Map<String, String> spannerPartition = new SpannerPartition(partitionState.getToken(), partitionState.getTvfName()).getSourcePartition();
 
         Map<String, ?> result = retrieveOffsetMap(spannerPartition);
         if (result == null) {
-            LOGGER.warn("Token {} no stored offset found", token);
+            LOGGER.warn("Token {} no stored offset found", partitionState);
             return null;
         }
-        LOGGER.info("Successfully retrieved offset {} for token {}", result, token);
+        LOGGER.info("Successfully retrieved offset {} for token {}", result, partitionState);
         return PartitionOffset.extractOffset(result);
     }
 
-    public Map<String, Timestamp> getOffsets(Collection<String> partitions) {
+    public Map<String, Timestamp> getOffsets(Collection<PartitionState> partitionStates) {
         Instant startTime = Instant.now();
 
-        List<Map<String, String>> partitionsMapList = partitions.stream()
-                .map(token -> new SpannerPartition(token).getSourcePartition())
+        List<Map<String, String>> partitionsMapList = partitionStates.stream()
+                .map(partitionState -> new SpannerPartition(partitionState.getToken(), partitionState.getTvfName()).getSourcePartition())
                 .collect(Collectors.toList());
+
+        Map<Map<String, String>, String> identityByPartitionMap = partitionStates.stream()
+                .collect(Collectors.toMap(
+                        partitionState -> new SpannerPartition(partitionState.getToken(), partitionState.getTvfName()).getSourcePartition(),
+                        PartitionState::getIdentity,
+                        (a, b) -> a));
 
         Map<Map<String, String>, Map<String, Object>> result;
         Future<Map<Map<String, String>, Map<String, Object>>> future = executor.submit(
@@ -131,18 +137,18 @@ public class PartitionOffsetProvider {
             result = future.get(batchRetrievalTimeoutMs, TimeUnit.MILLISECONDS);
         }
         catch (TimeoutException ex) {
-            LOGGER.error("Failed to retrieve batch offsets for {} partitions in time", partitions.size(), ex);
+            LOGGER.error("Failed to retrieve batch offsets for {} partitions in time", partitionStates.size(), ex);
             future.cancel(true);
             return Map.of();
         }
         catch (InterruptedException e) {
-            LOGGER.error("Interrupted while retrieving batch offsets for {} partitions", partitions.size(), e);
+            LOGGER.error("Interrupted while retrieving batch offsets for {} partitions", partitionStates.size(), e);
             future.cancel(true);
             Thread.currentThread().interrupt();
             return Map.of();
         }
         catch (ExecutionException e) {
-            LOGGER.error("Failed to retrieve batch offsets for {} partitions: {}", partitions.size(), e.toString(), e);
+            LOGGER.error("Failed to retrieve batch offsets for {} partitions: {}", partitionStates.size(), e.toString(), e);
             future.cancel(true);
             return Map.of();
         }
@@ -156,8 +162,12 @@ public class PartitionOffsetProvider {
         Map<String, Timestamp> map = new HashMap<>();
 
         for (Map.Entry<Map<String, String>, Map<String, Object>> entry : result.entrySet()) {
-            map.put(SpannerPartition.extractToken(entry.getKey()),
-                    PartitionOffset.extractOffset(entry.getValue()));
+            String identity = identityByPartitionMap.get(entry.getKey());
+            if (identity == null) {
+                LOGGER.warn("Retrieved offset for unknown partition {}", entry.getKey());
+                continue;
+            }
+            map.put(identity, PartitionOffset.extractOffset(entry.getValue()));
         }
 
         return map;
