@@ -5,7 +5,6 @@
  */
 package io.debezium.connector.spanner.task.operation;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -62,13 +61,13 @@ public class FindPartitionForStreamingOperation implements Operation {
                                         taskSyncContext.getTaskUid(), partitionState.getToken(), partitionState.getParents());
                             }
                         }
-                        else if (finishedPartitions.containsAll(partitionState.getParents()) || isMutableKeyRange) {
+                        else if (finishedPartitions.containsAll(toIdentities(partitionState.getParents(), partitionState.getTvfName())) || isMutableKeyRange) {
                             takePartitionForStreaming = true;
                             LOGGER.info("Task takes partition for streaming, taskUid: {}, partition {}",
                                     taskSyncContext.getTaskUid(), partitionState.getToken());
 
                         }
-                        else if (!atLeastOneParentExists(taskSyncContext, partitionState.getParents())) {
+                        else if (!atLeastOneParentExists(taskSyncContext, partitionState.getParents(), partitionState.getTvfName())) {
                             LOGGER.info("Task takes partition for streaming, since parents no longer exist, taskUid: {}, partition {}, parents {}",
                                     taskSyncContext.getTaskUid(), partitionState.getToken(), partitionState.getParents());
                             takePartitionForStreaming = true;
@@ -129,31 +128,27 @@ public class FindPartitionForStreamingOperation implements Operation {
         return MoveInGateChecker.canContinue(
                 taskSyncContext,
                 destPartition.getToken(),
+                destPartition.getTvfName(),
                 moveInState.getTimestamp(),
                 moveInState.getSourcePartitionTokens(),
                 finishedPartitions);
     }
 
-    private boolean atLeastOneParentExists(TaskSyncContext taskSyncContext, Set<String> parents) {
-        List<PartitionState> partitionStateList = new ArrayList<>();
-        partitionStateList.addAll(taskSyncContext.getCurrentTaskState().getPartitions());
-        partitionStateList.addAll(taskSyncContext.getTaskStates().values().stream()
-                .flatMap(taskState -> taskState.getPartitions().stream())
-                .collect(Collectors.toList()));
-        partitionStateList.addAll(taskSyncContext.getCurrentTaskState().getSharedPartitions());
-        partitionStateList.addAll(taskSyncContext.getTaskStates().values().stream()
-                .flatMap(taskState -> taskState.getSharedPartitions().stream())
-                .collect(Collectors.toList()));
-
-        Set<String> allPartitions = partitionStateList.stream()
-                .map(PartitionState::getToken)
-                .collect(Collectors.toSet());
+    private boolean atLeastOneParentExists(TaskSyncContext taskSyncContext, Set<String> parents, String tvfName) {
         for (String parent : parents) {
-            if (allPartitions.contains(parent)) {
+            if (MoveInGateChecker.findPartitionState(taskSyncContext, parent, tvfName) != null) {
                 return true;
             }
         }
         return false;
+    }
+
+    private static Set<String> toIdentities(Set<String> tokens, String tvfName) {
+        return tokens.stream().map(t -> toIdentity(t, tvfName)).collect(Collectors.toSet());
+    }
+
+    private static String toIdentity(String token, String tvfName) {
+        return tvfName == null || tvfName.isBlank() ? token : token + "#" + tvfName;
     }
 
     @Override

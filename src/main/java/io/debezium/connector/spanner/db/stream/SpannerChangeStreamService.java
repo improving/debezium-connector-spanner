@@ -288,7 +288,7 @@ public class SpannerChangeStreamService {
                                     // Buffer-gate path: keep the gRPC connection alive.
                                     boolean isFirst;
                                     if (gate == null) {
-                                        gate = new MoveInBufferGate(token, moveInBufferMaxEvents, taskSyncContextSupplier);
+                                        gate = new MoveInBufferGate(token, partition.getTvfName(), moveInBufferMaxEvents, taskSyncContextSupplier);
                                         gateIsFirst = true;
                                         isFirst = true;
                                     }

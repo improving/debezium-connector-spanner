@@ -214,7 +214,7 @@ public class TaskStateChangeEventHandler {
         // Fast state-machine phase: runs on the event-processor thread.
         performOperation(
                 new MoveOutStateUpdateOperation(
-                        event.getToken(), event.getCommitTimestamp(), event.getDestinationTokens()),
+                        event.getToken(), event.getTvfName(), event.getCommitTimestamp(), event.getDestinationTokens()),
                 new FindPartitionForStreamingOperation(changeStream.isMutableKeyRange()));
         // Blocking offset-fetch + stream-submission phase: offloaded to dedicated executor.
         schedulePendingPartitionsAsync();
@@ -224,7 +224,7 @@ public class TaskStateChangeEventHandler {
         // Fast state-machine phase: runs on the event-processor thread.
         performOperation(
                 new MoveInStateUpdateOperation(
-                        event.getToken(), event.getCommitTimestamp(), event.getRecordSequence(), event.getSourcePartitionTokens()),
+                        event.getToken(), event.getTvfName(), event.getCommitTimestamp(), event.getRecordSequence(), event.getSourcePartitionTokens()),
                 new FindPartitionForStreamingOperation(changeStream.isMutableKeyRange()));
         // Blocking offset-fetch + stream-submission phase: offloaded to dedicated executor.
         schedulePendingPartitionsAsync();
@@ -236,7 +236,7 @@ public class TaskStateChangeEventHandler {
         // stays alive and self-gates. No TakePartitionForStreamingOperation is needed.
         performOperation(
                 new PublishMoveInStateOperation(
-                        event.getToken(), event.getCommitTimestamp(), event.getRecordSequence(),
+                        event.getToken(), event.getTvfName(), event.getCommitTimestamp(), event.getRecordSequence(),
                         event.getSourcePartitionTokens(), event.isFirstMoveIn()));
     }
 

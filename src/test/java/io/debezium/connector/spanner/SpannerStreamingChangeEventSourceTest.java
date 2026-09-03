@@ -460,6 +460,7 @@ class SpannerStreamingChangeEventSourceTest {
 
         verify(partitionManager, timeout(3000)).notifyMoveOut(
                 org.mockito.ArgumentMatchers.eq("srcPartition"),
+                org.mockito.ArgumentMatchers.eq((String) null),
                 org.mockito.ArgumentMatchers.eq(commitTs),
                 argThat(dests -> dests.size() == 1 && "destPartition1".equals(dests.get(0))));
 

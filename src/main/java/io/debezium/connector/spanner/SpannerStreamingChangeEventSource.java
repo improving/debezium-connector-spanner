@@ -166,9 +166,9 @@ public class SpannerStreamingChangeEventSource implements CommittingRecordsStrea
                         LOGGER.debug("Mutable ordering disabled; ignoring MoveIn pause for partition {}", partition.getToken());
                         return;
                     }
-                    LOGGER.info("Partition onMoveIn: {}, commitTimestamp={}, recordSequence={}, sources={}",
-                            partition.getToken(), commitTimestamp, recordSequence, sourcePartitionTokens);
-                    partitionManager.notifyMoveIn(partition.getToken(), commitTimestamp, recordSequence, sourcePartitionTokens);
+                    LOGGER.info("Partition onMoveIn: {}, tvfName={}, commitTimestamp={}, recordSequence={}, sources={}",
+                            partition.getToken(), partition.getTvfName(), commitTimestamp, recordSequence, sourcePartitionTokens);
+                    partitionManager.notifyMoveIn(partition.getToken(), partition.getTvfName(), commitTimestamp, recordSequence, sourcePartitionTokens);
                 }
 
                 @Override
@@ -178,10 +178,10 @@ public class SpannerStreamingChangeEventSource implements CommittingRecordsStrea
                     if (!connectorConfig.isMutablePartitionOrderingEnabled()) {
                         return;
                     }
-                    LOGGER.info("Partition onMoveInPublishOnly (buffer-gate): {}, commitTimestamp={}, recordSequence={}, sources={}, isFirst={}",
-                            partition.getToken(), commitTimestamp, recordSequence, sourcePartitionTokens, isFirstMoveIn);
+                    LOGGER.info("Partition onMoveInPublishOnly (buffer-gate): {}, tvfName={}, commitTimestamp={}, recordSequence={}, sources={}, isFirst={}",
+                            partition.getToken(), partition.getTvfName(), commitTimestamp, recordSequence, sourcePartitionTokens, isFirstMoveIn);
                     partitionManager.publishMoveInStateOnly(
-                            partition.getToken(), commitTimestamp, recordSequence, sourcePartitionTokens, isFirstMoveIn);
+                            partition.getToken(), partition.getTvfName(), commitTimestamp, recordSequence, sourcePartitionTokens, isFirstMoveIn);
                 }
             });
 
@@ -405,6 +405,7 @@ public class SpannerStreamingChangeEventSource implements CommittingRecordsStrea
         }
         partitionManager.notifyMoveOut(
                 event.getPartitionToken(),
+                event.getMetadata().getTvfName(),
                 event.getCommitTimestamp(),
                 event.getDestinationPartitions());
 

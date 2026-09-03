@@ -38,7 +38,16 @@ public interface PartitionManager {
 
     void notifyMoveOut(String token, Timestamp commitTimestamp, List<String> destinationTokens) throws InterruptedException;
 
+    default void notifyMoveOut(String token, String tvfName, Timestamp commitTimestamp, List<String> destinationTokens) throws InterruptedException {
+        notifyMoveOut(token, commitTimestamp, destinationTokens);
+    }
+
     void notifyMoveIn(String token, Timestamp commitTimestamp, String recordSequence, List<String> sourcePartitionTokens) throws InterruptedException;
+
+    default void notifyMoveIn(String token, String tvfName, Timestamp commitTimestamp, String recordSequence, List<String> sourcePartitionTokens)
+            throws InterruptedException {
+        notifyMoveIn(token, commitTimestamp, recordSequence, sourcePartitionTokens);
+    }
 
     /**
      * Buffer-gate path: publishes the MoveIn state to the sync topic without transitioning
@@ -50,6 +59,12 @@ public interface PartitionManager {
     void publishMoveInStateOnly(String token, Timestamp commitTimestamp, String recordSequence,
                                 List<String> sourcePartitionTokens, boolean isFirstMoveIn)
             throws InterruptedException;
+
+    default void publishMoveInStateOnly(String token, String tvfName, Timestamp commitTimestamp, String recordSequence,
+                                        List<String> sourcePartitionTokens, boolean isFirstMoveIn)
+            throws InterruptedException {
+        publishMoveInStateOnly(token, commitTimestamp, recordSequence, sourcePartitionTokens, isFirstMoveIn);
+    }
 
     void updateProcessedTimestamp(String token, Timestamp processedTimestamp, String lastBoundaryRecordSequence) throws InterruptedException;
 

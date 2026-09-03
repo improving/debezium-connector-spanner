@@ -92,12 +92,19 @@ public class MoveInBufferGate {
     private final ArrayDeque<Segment> segments = new ArrayDeque<>();
 
     private final String destToken;
+    private final String destTvfName;
     private final int maxBufferEvents;
     private final Supplier<TaskSyncContext> taskSyncContextSupplier;
 
     public MoveInBufferGate(String destToken, int maxBufferEvents,
                             Supplier<TaskSyncContext> taskSyncContextSupplier) {
+        this(destToken, null, maxBufferEvents, taskSyncContextSupplier);
+    }
+
+    public MoveInBufferGate(String destToken, String destTvfName, int maxBufferEvents,
+                            Supplier<TaskSyncContext> taskSyncContextSupplier) {
         this.destToken = destToken;
+        this.destTvfName = destTvfName;
         this.maxBufferEvents = maxBufferEvents;
         this.taskSyncContextSupplier = taskSyncContextSupplier;
     }
@@ -186,7 +193,7 @@ public class MoveInBufferGate {
         List<ChangeStreamEvent> result = new ArrayList<>();
         while (!segments.isEmpty()) {
             Segment seg = segments.peekFirst();
-            if (!MoveInGateChecker.canContinue(ctx, destToken, seg.moveInTs,
+            if (!MoveInGateChecker.canContinue(ctx, destToken, destTvfName, seg.moveInTs,
                     new ArrayList<>(seg.sources), finished)) {
                 break; // oldest segment not yet confirmed — stop here
             }

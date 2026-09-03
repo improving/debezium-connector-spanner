@@ -75,19 +75,37 @@ public class SynchronizedPartitionManager implements PartitionManager {
 
     @Override
     public void notifyMoveOut(String token, Timestamp commitTimestamp, List<String> destinationTokens) throws InterruptedException {
-        syncEventPublisher.accept(new MoveOutNotificationEvent(token, commitTimestamp, destinationTokens));
+        notifyMoveOut(token, null, commitTimestamp, destinationTokens);
+    }
+
+    @Override
+    public void notifyMoveOut(String token, String tvfName, Timestamp commitTimestamp, List<String> destinationTokens) throws InterruptedException {
+        syncEventPublisher.accept(new MoveOutNotificationEvent(token, tvfName, commitTimestamp, destinationTokens));
     }
 
     @Override
     public void notifyMoveIn(String token, Timestamp commitTimestamp, String recordSequence, List<String> sourcePartitionTokens) throws InterruptedException {
-        syncEventPublisher.accept(new MoveInNotificationEvent(token, commitTimestamp, recordSequence, sourcePartitionTokens));
+        notifyMoveIn(token, null, commitTimestamp, recordSequence, sourcePartitionTokens);
+    }
+
+    @Override
+    public void notifyMoveIn(String token, String tvfName, Timestamp commitTimestamp, String recordSequence, List<String> sourcePartitionTokens)
+            throws InterruptedException {
+        syncEventPublisher.accept(new MoveInNotificationEvent(token, tvfName, commitTimestamp, recordSequence, sourcePartitionTokens));
     }
 
     @Override
     public void publishMoveInStateOnly(String token, Timestamp commitTimestamp, String recordSequence,
                                        List<String> sourcePartitionTokens, boolean isFirstMoveIn)
             throws InterruptedException {
-        syncEventPublisher.accept(new MoveInPublishOnlyEvent(token, commitTimestamp, recordSequence, sourcePartitionTokens, isFirstMoveIn));
+        publishMoveInStateOnly(token, null, commitTimestamp, recordSequence, sourcePartitionTokens, isFirstMoveIn);
+    }
+
+    @Override
+    public void publishMoveInStateOnly(String token, String tvfName, Timestamp commitTimestamp, String recordSequence,
+                                       List<String> sourcePartitionTokens, boolean isFirstMoveIn)
+            throws InterruptedException {
+        syncEventPublisher.accept(new MoveInPublishOnlyEvent(token, tvfName, commitTimestamp, recordSequence, sourcePartitionTokens, isFirstMoveIn));
     }
 
     @Override
