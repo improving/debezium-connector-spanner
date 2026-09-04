@@ -67,15 +67,9 @@ public class ChangeStreamDao {
         String query;
         Statement statement;
         if (this.isPostgres()) {
-            String normalizedChangeStreamName = changeStreamName.toLowerCase();
-            if (this.isMutableKeyRange) {
-                query = "SELECT * FROM \"spanner\".\"read_proto_bytes_" + normalizedChangeStreamName
-                        + "\"($1, $2, $3, $4, null)";
-            }
-            else {
-                query = "SELECT * FROM \"spanner\".\"read_json_" + normalizedChangeStreamName
-                        + "\"($1, $2, $3, $4, null)";
-            }
+            String resolvedPostgresTvfName = resolvePostgresTvfName(tvfName);
+            query = "SELECT * FROM \"spanner\".\"" + escapePostgresIdentifier(resolvedPostgresTvfName)
+                    + "\"($1, $2, $3, $4, null)";
             statement = Statement.newBuilder(query)
                     .bind("p1")
                     .to(startTimestamp)
@@ -114,6 +108,21 @@ public class ChangeStreamDao {
                 .executeQuery(statement, Options.priority(rpcPriority), Options.tag("kafka-spanner-connector-job=" + jobName));
 
         return new ChangeStreamResultSet(resultSet);
+    }
+
+    private String resolvePostgresTvfName(String tvfName) {
+        if (tvfName == null || tvfName.isBlank()) {
+            String prefix = isMutableKeyRange ? "read_proto_bytes_" : "read_json_";
+            return prefix + changeStreamName.toLowerCase();
+        }
+
+        String unquoted = tvfName.replace("\"", "");
+        int lastDot = unquoted.lastIndexOf('.');
+        return lastDot >= 0 ? unquoted.substring(lastDot + 1) : unquoted;
+    }
+
+    private String escapePostgresIdentifier(String identifier) {
+        return identifier.replace("\"", "\"\"");
     }
 
     public boolean isPostgres() {
