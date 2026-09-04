@@ -112,6 +112,56 @@ class TaskSyncContextTest {
         Assertions.assertEquals(taskState3.getSharedPartitions().size(), 1);
     }
 
+    @Test
+    void partitionCountsAndDuplicationUseTvfAwareIdentity() {
+        PartitionState tokenTvfA = PartitionState.builder()
+                .token("token")
+                .tvfName("tvfA")
+                .state(PartitionStateEnum.RUNNING)
+                .build();
+        PartitionState tokenTvfB = PartitionState.builder()
+                .token("token")
+                .tvfName("tvfB")
+                .state(PartitionStateEnum.RUNNING)
+                .build();
+        PartitionState tokenTvfCShared = PartitionState.builder()
+                .token("token")
+                .tvfName("tvfC")
+                .state(PartitionStateEnum.CREATED)
+                .build();
+        PartitionState tokenTvfAShared = PartitionState.builder()
+                .token("token")
+                .tvfName("tvfA")
+                .state(PartitionStateEnum.CREATED)
+                .build();
+
+        TaskState task0 = TaskState.builder()
+                .taskUid("task0")
+                .partitions(List.of(tokenTvfA))
+                .sharedPartitions(List.of(tokenTvfAShared, tokenTvfCShared))
+                .build();
+        TaskState task1 = TaskState.builder()
+                .taskUid("task1")
+                .partitions(List.of(tokenTvfB))
+                .sharedPartitions(List.of())
+                .build();
+        TaskSyncContext context = TaskSyncContext.builder()
+                .taskUid("task0")
+                .currentTaskState(task0)
+                .taskStates(Map.of("task1", task1))
+                .build();
+        TaskSyncEvent event = TaskSyncEvent.builder()
+                .taskUid("task0")
+                .taskStates(Map.of("task0", task0, "task1", task1))
+                .build();
+
+        Assertions.assertEquals(2, context.getNumPartitions());
+        Assertions.assertEquals(1, context.getNumSharedPartitions());
+        Assertions.assertFalse(context.checkDuplication(false, "test"));
+        Assertions.assertEquals(2, event.getNumPartitions());
+        Assertions.assertEquals(1, event.getNumSharedPartitions());
+    }
+
     private TaskSyncContext buildEmptyTaskSyncContext() {
         return TaskSyncContext.builder()
                 .taskUid("task0")

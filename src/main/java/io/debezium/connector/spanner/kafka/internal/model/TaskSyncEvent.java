@@ -165,7 +165,7 @@ public class TaskSyncEvent {
                 .filter(
                         partitionState -> !partitionState.getState().equals(PartitionStateEnum.FINISHED)
                                 && !partitionState.getState().equals(PartitionStateEnum.REMOVED))
-                .collect(Collectors.groupingBy(PartitionState::getToken));
+                .collect(Collectors.groupingBy(PartitionState::getIdentity));
 
         return partitionsMap.size();
     }
@@ -176,7 +176,7 @@ public class TaskSyncEvent {
                 .filter(
                         partitionState -> !partitionState.getState().equals(PartitionStateEnum.FINISHED)
                                 && !partitionState.getState().equals(PartitionStateEnum.REMOVED))
-                .collect(Collectors.groupingBy(PartitionState::getToken));
+                .collect(Collectors.groupingBy(PartitionState::getIdentity));
 
         Map<String, PartitionState> partitions = partitionsMap.entrySet().stream()
                 .map(entry -> new AbstractMap.SimpleEntry<>(entry.getKey(), entry.getValue().get(0)))
@@ -184,8 +184,8 @@ public class TaskSyncEvent {
 
         Map<String, List<PartitionState>> sharedPartitionsMap = getTaskStates().values().stream()
                 .flatMap(taskState -> taskState.getSharedPartitions().stream())
-                .filter(partitionState -> !partitions.containsKey(partitionState.getToken()))
-                .collect(Collectors.groupingBy(PartitionState::getToken));
+                .filter(partitionState -> !partitions.containsKey(partitionState.getIdentity()))
+                .collect(Collectors.groupingBy(PartitionState::getIdentity));
 
         return sharedPartitionsMap.size();
     }

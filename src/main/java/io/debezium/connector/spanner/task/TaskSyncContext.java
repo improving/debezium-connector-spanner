@@ -420,7 +420,7 @@ public class TaskSyncContext {
                 .filter(
                         partitionState -> !partitionState.getState().equals(PartitionStateEnum.FINISHED)
                                 && !partitionState.getState().equals(PartitionStateEnum.REMOVED))
-                .collect(Collectors.groupingBy(PartitionState::getToken));
+                .collect(Collectors.groupingBy(PartitionState::getIdentity));
 
         return partitionsMap.size();
     }
@@ -431,7 +431,7 @@ public class TaskSyncContext {
                 .filter(
                         partitionState -> !partitionState.getState().equals(PartitionStateEnum.FINISHED)
                                 && !partitionState.getState().equals(PartitionStateEnum.REMOVED))
-                .collect(Collectors.groupingBy(PartitionState::getToken));
+                .collect(Collectors.groupingBy(PartitionState::getIdentity));
 
         Map<String, PartitionState> partitions = partitionsMap.entrySet().stream()
                 .map(entry -> new AbstractMap.SimpleEntry<>(entry.getKey(), entry.getValue().get(0)))
@@ -439,8 +439,8 @@ public class TaskSyncContext {
 
         Map<String, List<PartitionState>> sharedPartitionsMap = getAllTaskStates().values().stream()
                 .flatMap(taskState -> taskState.getSharedPartitions().stream())
-                .filter(partitionState -> !partitions.containsKey(partitionState.getToken()))
-                .collect(Collectors.groupingBy(PartitionState::getToken));
+                .filter(partitionState -> !partitions.containsKey(partitionState.getIdentity()))
+                .collect(Collectors.groupingBy(PartitionState::getIdentity));
 
         return sharedPartitionsMap.size();
     }
@@ -453,7 +453,7 @@ public class TaskSyncContext {
                 .filter(
                         partitionState -> !partitionState.getState().equals(PartitionStateEnum.FINISHED)
                                 && !partitionState.getState().equals(PartitionStateEnum.REMOVED))
-                .collect(Collectors.groupingBy(PartitionState::getToken));
+                .collect(Collectors.groupingBy(PartitionState::getIdentity));
 
         int numPartitions = partitionsMap.size();
 
@@ -474,8 +474,8 @@ public class TaskSyncContext {
 
         Map<String, List<PartitionState>> sharedPartitionsMap = getAllTaskStates().values().stream()
                 .flatMap(taskState -> taskState.getSharedPartitions().stream())
-                .filter(partitionState -> !partitions.containsKey(partitionState.getToken()))
-                .collect(Collectors.groupingBy(PartitionState::getToken));
+                .filter(partitionState -> !partitions.containsKey(partitionState.getIdentity()))
+                .collect(Collectors.groupingBy(PartitionState::getIdentity));
 
         int numSharedPartitions = sharedPartitionsMap.size();
 
