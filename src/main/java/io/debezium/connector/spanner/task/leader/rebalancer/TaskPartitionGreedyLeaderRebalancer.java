@@ -56,7 +56,7 @@ public class TaskPartitionGreedyLeaderRebalancer implements TaskPartitionRebalan
         List<PartitionState> allPartitions = filterDuplications(obsoleteTasks.values().stream()
                 .flatMap(taskState -> taskState.getPartitions().stream()).collect(Collectors.toList()));
 
-        List<PartitionState> partitions = allPartitions.stream().filter(partitionState -> !tokens.contains(partitionState.getToken()))
+        List<PartitionState> partitions = allPartitions.stream().filter(partitionState -> !tokens.contains(partitionState.getIdentity()))
                 .map(partitionState -> {
                     if (PartitionStateEnum.SCHEDULED.equals(partitionState.getState()) ||
                             PartitionStateEnum.RUNNING.equals(partitionState.getState())) {
@@ -91,7 +91,7 @@ public class TaskPartitionGreedyLeaderRebalancer implements TaskPartitionRebalan
         List<PartitionState> leaderPartitionList = new ArrayList<>(leaderTaskState.getPartitions());
 
         List<PartitionState> newSharedPartitions = obsoleteTasksSharedPartitions.stream()
-                .filter(partitionState -> !tokens.contains(partitionState.getToken()))
+                .filter(partitionState -> !tokens.contains(partitionState.getIdentity()))
                 .map(partitionState -> {
                     if (survivedTasks.containsKey(partitionState.getAssigneeTaskUid())
                             && !partitionState.getAssigneeTaskUid().equals(leaderUid)) {
@@ -105,7 +105,7 @@ public class TaskPartitionGreedyLeaderRebalancer implements TaskPartitionRebalan
         leaderSharedPartitionList.addAll(newSharedPartitions);
 
         List<PartitionState> newPartitions = obsoleteTasksSharedPartitions.stream()
-                .filter(partitionState -> !tokens.contains(partitionState.getToken()))
+                .filter(partitionState -> !tokens.contains(partitionState.getIdentity()))
                 .map(partitionState -> {
                     if (!survivedTasks.containsKey(partitionState.getAssigneeTaskUid())
                             || partitionState.getAssigneeTaskUid().equals(leaderUid)) {
@@ -134,7 +134,7 @@ public class TaskPartitionGreedyLeaderRebalancer implements TaskPartitionRebalan
         List<PartitionState> partitions = filterDuplications(survivedTasks.values().stream()
                 .flatMap(taskState -> taskState.getSharedPartitions().stream()).collect(Collectors.toList()))
                 .stream()
-                .filter(partitionState -> !tokens.contains(partitionState.getToken()))
+                .filter(partitionState -> !tokens.contains(partitionState.getIdentity()))
                 .filter(partitionState -> !survivedTasks.containsKey(partitionState.getAssigneeTaskUid()))
                 .map(partitionState -> partitionState.toBuilder()
                         .assigneeTaskUid(leaderTaskState.getTaskUid())
@@ -159,7 +159,7 @@ public class TaskPartitionGreedyLeaderRebalancer implements TaskPartitionRebalan
                 .flatMap(taskState -> taskState.getPartitions().stream()).collect(Collectors.toList()));
 
         List<PartitionState> finishedPartitions = allPartitions.stream()
-                .filter(partitionState -> !tokens.contains(partitionState.getToken()))
+                .filter(partitionState -> !tokens.contains(partitionState.getIdentity()))
                 .map(partitionState -> {
                     if (PartitionStateEnum.FINISHED.equals(partitionState.getState())) {
                         return partitionState.toBuilder()
@@ -179,7 +179,7 @@ public class TaskPartitionGreedyLeaderRebalancer implements TaskPartitionRebalan
     }
 
     private List<PartitionState> filterDuplications(List<PartitionState> partitionStates) {
-        return partitionStates.stream().collect(Collectors.groupingBy(PartitionState::getToken)).values().stream()
+        return partitionStates.stream().collect(Collectors.groupingBy(PartitionState::getIdentity)).values().stream()
                 .flatMap(list -> list.stream().sorted().limit(1)).collect(Collectors.toList());
     }
 

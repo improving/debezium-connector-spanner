@@ -23,6 +23,48 @@ import io.debezium.connector.spanner.kafka.internal.model.TaskState;
 class TaskPartitionEqualSharingRebalancerTest {
 
     @Test
+    void greedyRebalancerKeepsSameTokenFromDifferentTvfs() {
+        TaskState leader = taskState("leader", partition("token", "tvfA"));
+        TaskState obsolete = taskState("obsolete", partition("token", "tvfB"));
+
+        TaskState result = new TaskPartitionGreedyLeaderRebalancer()
+                .rebalance(leader, Map.of("leader", leader), Map.of("obsolete", obsolete));
+
+        Assertions.assertEquals(Set.of("token#tvfA", "token#tvfB"), result.getPartitions().stream()
+                .map(PartitionState::getIdentity)
+                .collect(Collectors.toSet()));
+    }
+
+    @Test
+    void equalSharingRebalancerKeepsSameTokenFromDifferentTvfs() {
+        TaskState leader = taskState("leader", partition("token", "tvfA"));
+        TaskState obsolete = taskState("obsolete", partition("token", "tvfB"));
+
+        TaskState result = new TaskPartitionEqualSharingRebalancer()
+                .rebalance(leader, Map.of("leader", leader), Map.of("obsolete", obsolete));
+
+        Assertions.assertEquals(Set.of("token#tvfA", "token#tvfB"), result.getPartitions().stream()
+                .map(PartitionState::getIdentity)
+                .collect(Collectors.toSet()));
+    }
+
+    private static PartitionState partition(String token, String tvfName) {
+        return PartitionState.builder()
+                .token(token)
+                .tvfName(tvfName)
+                .state(PartitionStateEnum.CREATED)
+                .build();
+    }
+
+    private static TaskState taskState(String taskUid, PartitionState partition) {
+        return TaskState.builder()
+                .taskUid(taskUid)
+                .partitions(List.of(partition))
+                .sharedPartitions(List.of())
+                .build();
+    }
+
+    @Test
     // TODO: check
     @Disabled("Test is randomly failing")
     void rebalance() {

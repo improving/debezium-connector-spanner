@@ -33,7 +33,7 @@ public class ClearSharedPartitionOperation implements Operation {
 
         // Retrieve the tokens that are owned by other tasks.
         Set<String> otherTokens = taskSyncContext.getAllTaskStates().values().stream().flatMap(taskState -> taskState.getPartitions().stream())
-                .map(PartitionState::getToken)
+                .map(PartitionState::getIdentity)
                 .collect(Collectors.toSet());
 
         List<PartitionState> currentSharedList = currentTaskState.getSharedPartitions().stream()
@@ -48,7 +48,7 @@ public class ClearSharedPartitionOperation implements Operation {
             // the other task has actually taken ownership — never drop it while the competing
             // task still only has a sharedPartitions claim, to avoid leaving the partition
             // unstreamed if that task crashes before it starts.
-            if (otherTokens.contains(sharedToken.getToken())) {
+            if (otherTokens.contains(sharedToken.getIdentity())) {
                 LOGGER.info("Task {}, removing token {} since it is already owned by other tasks", taskSyncContext.getTaskUid(), sharedToken);
             }
             else {
@@ -66,7 +66,7 @@ public class ClearSharedPartitionOperation implements Operation {
         for (PartitionState p : currentPartitions) {
             if (!PartitionStateEnum.FINISHED.equals(p.getState())
                     && !PartitionStateEnum.REMOVED.equals(p.getState())
-                    && lowerUidActiveTokens.contains(p.getToken())) {
+                    && lowerUidActiveTokens.contains(p.getIdentity())) {
                 LOGGER.warn("Task {}, self-healing duplicate partition {} — a lower-UID task already owns it; marking REMOVED",
                         taskSyncContext.getTaskUid(), p.getToken());
                 finalPartitions.add(p.toBuilder().state(PartitionStateEnum.REMOVED).build());
@@ -100,7 +100,7 @@ public class ClearSharedPartitionOperation implements Operation {
                 .flatMap(ts -> ts.getPartitions().stream())
                 .filter(p -> !PartitionStateEnum.FINISHED.equals(p.getState())
                         && !PartitionStateEnum.REMOVED.equals(p.getState()))
-                .map(PartitionState::getToken)
+                .map(PartitionState::getIdentity)
                 .collect(Collectors.toSet());
     }
 

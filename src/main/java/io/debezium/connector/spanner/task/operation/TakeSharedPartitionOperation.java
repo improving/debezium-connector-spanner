@@ -34,7 +34,7 @@ public class TakeSharedPartitionOperation implements Operation {
 
         List<PartitionState> sharedPartitions = filterDuplications(findSharedPartition(context));
         Set<String> tokens = taskState.getPartitions().stream()
-                .map(PartitionState::getToken)
+                .map(PartitionState::getIdentity)
                 .collect(Collectors.toSet());
 
         // Tokens currently owned (non-finished) by other tasks. Used to detect the mutable key
@@ -45,16 +45,16 @@ public class TakeSharedPartitionOperation implements Operation {
                 .flatMap(ts -> ts.getPartitions().stream())
                 .filter(p -> !PartitionStateEnum.FINISHED.equals(p.getState())
                         && !PartitionStateEnum.REMOVED.equals(p.getState()))
-                .map(PartitionState::getToken)
+                .map(PartitionState::getIdentity)
                 .collect(Collectors.toSet());
 
         List<PartitionState> partitions = new ArrayList<>(taskState.getPartitions());
 
         sharedPartitions.forEach(partitionState -> {
-            if (!tokens.contains(partitionState.getToken())) {
-                if (otherOwnedTokens.contains(partitionState.getToken())) {
+            if (!tokens.contains(partitionState.getIdentity())) {
+                if (otherOwnedTokens.contains(partitionState.getIdentity())) {
                     LOGGER.warn("Task {} : skipping shared partition {} — already owned by another task",
-                            context.getTaskUid(), partitionState.getToken());
+                            context.getTaskUid(), partitionState.getIdentity());
                 }
                 else {
                     partitions.add(partitionState);
@@ -90,7 +90,7 @@ public class TakeSharedPartitionOperation implements Operation {
 
     private List<PartitionState> filterDuplications(List<PartitionState> partitionStates) {
         return partitionStates.stream()
-                .collect(Collectors.groupingBy(PartitionState::getToken))
+                .collect(Collectors.groupingBy(PartitionState::getIdentity))
                 .values()
                 .stream()
                 .flatMap(list -> list.stream().sorted().limit(1))
