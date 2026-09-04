@@ -57,6 +57,10 @@ public class SpannerPartition implements Partition {
         return tvfName;
     }
 
+    public String getIdentity() {
+        return tvfName == null || tvfName.isBlank() ? partitionToken : partitionToken + "#" + tvfName;
+    }
+
     public static String extractToken(Map<String, ?> sourcePartition) {
         return (String) sourcePartition.get(PARTITION_TOKEN_KEY);
     }
