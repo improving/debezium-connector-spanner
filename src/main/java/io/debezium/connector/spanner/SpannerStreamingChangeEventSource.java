@@ -144,9 +144,14 @@ public class SpannerStreamingChangeEventSource implements CommittingRecordsStrea
 
                 @Override
                 public boolean onStuckPartition(String token) throws InterruptedException {
+                    return onStuckPartition(token, null);
+                }
+
+                @Override
+                public boolean onStuckPartition(String token, String tvfName) throws InterruptedException {
                     if (STUCK_PARTITION_STRATEGY.equals(StuckPartitionStrategy.REPEAT_STREAMING)) {
                         LOGGER.warn("Try to requery partition {}", token);
-                        partitionManager.updateToReadyForStreaming(token);
+                        partitionManager.updateToReadyForStreaming(token, tvfName);
                     }
                     else if (STUCK_PARTITION_STRATEGY.equals(StuckPartitionStrategy.ESCALATE)) {
                         return true;

@@ -43,7 +43,10 @@ public class SpannerPartition implements Partition {
     }
 
     public String toString() {
-        return "SpannerPartition[" + getSourcePartition() + "]";
+        if (tvfName == null || tvfName.isBlank()) {
+            return "SpannerPartition[{partitionToken=" + partitionToken + "}]";
+        }
+        return "SpannerPartition[{partitionToken=" + partitionToken + ", tvfName=" + tvfName + "}]";
     }
 
     public String getValue() {

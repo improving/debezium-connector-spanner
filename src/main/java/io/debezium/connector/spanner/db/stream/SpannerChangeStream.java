@@ -72,7 +72,7 @@ public class SpannerChangeStream implements ChangeStream {
         this.metricsEventPublisher = metricsEventPublisher;
         this.partitionQueryingMonitor = new PartitionQueryingMonitor(partitionThreadPool,
                 heartBeatInterval,
-                this::onStuckPartition,
+                (token, tvfName) -> this.onStuckPartition(token, tvfName),
                 this::onError,
                 metricsEventPublisher, maxMissedHeartbeats);
         this.taskUid = taskUid;
@@ -102,7 +102,7 @@ public class SpannerChangeStream implements ChangeStream {
                     throw exception.get();
                 }
 
-                metricsEventPublisher.publishMetricEvent(new ActiveQueriesUpdateMetricEvent(partitionThreadPool.getActiveThreads().size()));
+                metricsEventPublisher.publishMetricEvent(new ActiveQueriesUpdateMetricEvent(partitionThreadPool.getActivePartitions().size()));
             }
 
         }
@@ -128,7 +128,7 @@ public class SpannerChangeStream implements ChangeStream {
             return false;
         }
 
-        boolean submitted = partitionThreadPool.submit(partition.getToken(), () -> {
+        boolean submitted = partitionThreadPool.submit(partition.getToken(), partition.getTvfName(), () -> {
             LOGGER.info("task {}, Started streaming from partition with token {}", this.taskUid, partition.getToken());
             try {
                 streamService.getEvents(partition, this::onStreamEvent, this.partitionEventListener);
@@ -162,7 +162,7 @@ public class SpannerChangeStream implements ChangeStream {
 
         if (submitted) {
             metricsEventPublisher.publishMetricEvent(new NewQueueMetricEvent());
-            metricsEventPublisher.publishMetricEvent(new ActiveQueriesUpdateMetricEvent(partitionThreadPool.getActiveThreads().size()));
+            metricsEventPublisher.publishMetricEvent(new ActiveQueriesUpdateMetricEvent(partitionThreadPool.getActivePartitions().size()));
         }
 
         return submitted;
@@ -179,6 +179,15 @@ public class SpannerChangeStream implements ChangeStream {
         LOGGER.warn("Partition {} is stuck", token);
         this.partitionThreadPool.stop(token);
         if (this.partitionEventListener.onStuckPartition(token)) {
+            this.onError(new StuckPartitionException(token));
+        }
+    }
+
+    @VisibleForTesting
+    void onStuckPartition(String token, String tvfName) throws InterruptedException {
+        LOGGER.warn("Partition {} is stuck", new PartitionThreadPool.PartitionKey(token, tvfName));
+        this.partitionThreadPool.stop(token, tvfName);
+        if (this.partitionEventListener.onStuckPartition(token, tvfName)) {
             this.onError(new StuckPartitionException(token));
         }
     }
