@@ -187,7 +187,7 @@ public class TaskStateChangeEventProcessor {
     private List<Partition> removeAlreadyExistingPartitions(List<Partition> partitions) {
         Set<String> existingPartitions = TaskStateUtil.allPartitionTokens(taskSyncContextHolder.get());
         return partitions.stream()
-                .filter(p -> !existingPartitions.contains(p.getToken()))
+                .filter(p -> !existingPartitions.contains(p.getIdentity()))
                 .collect(toList());
     }
 

@@ -9,6 +9,7 @@ import static io.debezium.connector.spanner.task.TaskTestHelper.generateTaskStat
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -160,6 +161,8 @@ class TaskSyncContextTest {
         Assertions.assertFalse(context.checkDuplication(false, "test"));
         Assertions.assertEquals(2, event.getNumPartitions());
         Assertions.assertEquals(1, event.getNumSharedPartitions());
+        Assertions.assertEquals(3, TaskStateUtil.totalInProgressPartitions(context));
+        Assertions.assertEquals(Set.of("token#tvfA", "token#tvfB", "token#tvfC"), TaskStateUtil.allPartitionTokens(context));
     }
 
     private TaskSyncContext buildEmptyTaskSyncContext() {

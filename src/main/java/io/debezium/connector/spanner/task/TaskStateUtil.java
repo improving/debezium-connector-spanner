@@ -78,14 +78,14 @@ public class TaskStateUtil {
         var allOwnedPartitions = allTaskStates.stream()
                 .flatMap(t -> t.getPartitions().stream())
                 .filter(partitionFilter)
-                .map(PartitionState::getToken)
+                .map(PartitionState::getIdentity)
                 .collect(toSet());
 
         var allSharedPartitions = allTaskStates.stream()
                 .flatMap(t -> t.getSharedPartitions().stream())
-                .filter(p -> !allOwnedPartitions.contains(p))
+                .filter(p -> !allOwnedPartitions.contains(p.getIdentity()))
                 .filter(partitionFilter)
-                .map(PartitionState::getToken)
+                .map(PartitionState::getIdentity)
                 .collect(toSet());
 
         Set<String> result = new HashSet<>(allOwnedPartitions.size() + allSharedPartitions.size());

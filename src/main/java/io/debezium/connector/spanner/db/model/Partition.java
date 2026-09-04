@@ -86,6 +86,10 @@ public class Partition {
         return tvfName;
     }
 
+    public String getIdentity() {
+        return tvfName == null || tvfName.isBlank() ? partitionToken : partitionToken + "#" + tvfName;
+    }
+
     public Builder toBuilder() {
         return new Builder(this);
     }

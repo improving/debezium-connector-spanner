@@ -141,13 +141,13 @@ public class ChildPartitionOperation implements Operation {
             Set<String> tokens = taskState.getPartitions().stream()
                     .filter(partitionState -> !PartitionStateEnum.FINISHED.equals(partitionState.getState()) &&
                             !PartitionStateEnum.REMOVED.equals(partitionState.getState()))
-                    .map(PartitionState::getToken)
+                    .map(PartitionState::getIdentity)
                     .collect(Collectors.toCollection(HashSet::new));
 
             Set<String> assignedTokens = taskStates.stream()
                     .flatMap(taskState1 -> taskState1.getSharedPartitions().stream())
                     .filter(partitionState -> partitionState.getAssigneeTaskUid().equals(taskState.getTaskUid()))
-                    .map(PartitionState::getToken)
+                    .map(PartitionState::getIdentity)
                     .collect(Collectors.toSet());
 
             tokens.addAll(assignedTokens);
