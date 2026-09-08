@@ -17,7 +17,7 @@ public class PerPlacementTvfPostgresqlIT extends PerPlacementTvfTestBase {
     private static final Logger LOGGER = LoggerFactory.getLogger(PerPlacementTvfPostgresqlIT.class);
 
     @Test
-    public void shouldReadEastPlacementOnlyFromEastTvfPostgresql() throws Exception {
-        shouldReadEastPlacementOnlyFromEastTvf(Dialect.POSTGRESQL, LOGGER);
+    public void shouldReadEachPlacementOnlyFromItsTvfPostgresql() throws Exception {
+        shouldReadEachPlacementOnlyFromItsTvf(Dialect.POSTGRESQL, LOGGER);
     }
 }

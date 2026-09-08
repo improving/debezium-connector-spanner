@@ -6,8 +6,8 @@
 package io.debezium.connector.spanner;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.TimeUnit;
@@ -25,6 +25,19 @@ import io.debezium.connector.spanner.util.PartitionMode;
 
 public class PerPlacementTvfTestBase extends AbstractSpannerConnectorIT {
 
+    static {
+        // Per-placement TVF reads start three independent change-stream partitions on real
+        // Cloud Spanner, and the unassigned/default placement can lag behind the named
+        // placements. The default 30 s record wait time is often too tight; raise it for
+        // real-Spanner runs without overriding an explicit user-supplied -D value.
+        if (Connection.isRealSpanner()) {
+            System.setProperty("debezium.test.records.waittime",
+                    System.getProperty("debezium.test.records.waittime", "90"));
+            System.setProperty("debezium.test.records.waittime.after.nulls",
+                    System.getProperty("debezium.test.records.waittime.after.nulls", "5"));
+        }
+    }
+
     private static final String EAST_INSTANCE_PARTITION = System.getProperty(
             "spanner.test.east.instance.partition", "east-partition");
     private static final String WEST_INSTANCE_PARTITION = System.getProperty(
@@ -34,7 +47,7 @@ public class PerPlacementTvfTestBase extends AbstractSpannerConnectorIT {
     private static final String WEST_PLACEMENT = System.getProperty(
             "spanner.test.west.placement", "PlacementMoveWest");
 
-    public void shouldReadEastPlacementOnlyFromEastTvf(Dialect dialect, Logger logger) throws Exception {
+    public void shouldReadEachPlacementOnlyFromItsTvf(Dialect dialect, Logger logger) throws Exception {
         Assumptions.assumeTrue(Connection.isRealSpanner(),
                 "Per-placement TVF tests require real Cloud Spanner. Run with -Dspanner.test.real=true.");
 
@@ -57,7 +70,7 @@ public class PerPlacementTvfTestBase extends AbstractSpannerConnectorIT {
 
             String eastTvf = tvfForPlacement(tvfNames, EAST_PLACEMENT);
             String westTvf = tvfForPlacement(tvfNames, WEST_PLACEMENT);
-            assertThat(tvfNames).anyMatch(name -> name.toLowerCase(Locale.ROOT).endsWith("_placement_default"));
+            String defaultTvf = tvfForPlacement(tvfNames, "default");
             Configuration config = Configuration.copy(
                     buildTestConfig(base, stream, table, PartitionMode.MUTABLE_KEY_RANGE))
                     .with("gcp.spanner.placement.tvf.names", String.join(",", tvfNames))
@@ -72,20 +85,17 @@ public class PerPlacementTvfTestBase extends AbstractSpannerConnectorIT {
 
             connection.executeUpdate("INSERT INTO " + table
                     + "(id, region, value) VALUES (1, '" + EAST_PLACEMENT + "', 'east-value')");
+            connection.executeUpdate("INSERT INTO " + table
+                    + "(id, region, value) VALUES (2, '" + WEST_PLACEMENT + "', 'west-value')");
+            connection.executeUpdate("INSERT INTO " + table
+                    + "(id, region, value) VALUES (3, 'default', 'default-value')");
 
-            assertTrue(waitForAvailableRecords(waitTimeForRecords(), TimeUnit.SECONDS));
-            SourceRecords sourceRecords = consumeRecordsByTopic(10, false);
-            List<SourceRecord> records = sourceRecords.recordsForTopic(getTopicName(config, table));
+            List<SourceRecord> records = consumeRecordsForTopic(config, table, 3);
 
-            assertThat(records).hasSize(1);
-            SourceRecord record = records.get(0);
-            Struct after = ((Struct) record.value()).getStruct("after");
-            assertThat(after.getInt64("id")).isEqualTo(1L);
-            assertThat(after.getString("region")).isEqualTo(EAST_PLACEMENT);
-            assertThat(after.getString("value")).isEqualTo("east-value");
-            assertThat(SpannerPartition.extractTvfName(record.sourcePartition())).isEqualTo(eastTvf);
-            assertThat(records).noneMatch(
-                    r -> westTvf.equals(SpannerPartition.extractTvfName(r.sourcePartition())));
+            assertThat(records).hasSize(3);
+            assertRecord(records, 1L, EAST_PLACEMENT, "east-value", eastTvf);
+            assertRecord(records, 2L, WEST_PLACEMENT, "west-value", westTvf);
+            assertRecord(records, 3L, "default", "default-value", defaultTvf);
 
             stopConnector();
             connectorStarted = false;
@@ -98,6 +108,33 @@ public class PerPlacementTvfTestBase extends AbstractSpannerConnectorIT {
             connection.dropChangeStream(stream);
             connection.dropTable(table);
         }
+    }
+
+    private List<SourceRecord> consumeRecordsForTopic(Configuration config, String table, int expectedCount) throws InterruptedException {
+        List<SourceRecord> records = new ArrayList<>();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(waitTimeForRecords());
+        long pollStepSeconds = Math.min(5, waitTimeForRecords() / 3);
+        do {
+            waitForAvailableRecords(pollStepSeconds, TimeUnit.SECONDS);
+            List<SourceRecord> polled = consumeRecordsByTopic(expectedCount - records.size(), false)
+                    .recordsForTopic(getTopicName(config, table));
+            if (polled != null) {
+                records.addAll(polled);
+            }
+        } while (records.size() < expectedCount && System.nanoTime() < deadline);
+        return records;
+    }
+
+    private static void assertRecord(List<SourceRecord> records, long id, String region, String value, String tvfName) {
+        List<SourceRecord> matchingRecords = records.stream()
+                .filter(record -> ((Struct) record.value()).getStruct("after").getInt64("id") == id)
+                .toList();
+        assertThat(matchingRecords).hasSize(1);
+        SourceRecord record = matchingRecords.get(0);
+        Struct after = ((Struct) record.value()).getStruct("after");
+        assertThat(after.getString("region")).isEqualTo(region);
+        assertThat(after.getString("value")).isEqualTo(value);
+        assertThat(SpannerPartition.extractTvfName(record.sourcePartition())).isEqualTo(tvfName);
     }
 
     private static String tvfForPlacement(List<String> tvfNames, String placement) {

@@ -17,7 +17,7 @@ public class PerPlacementTvfGoogleSqlIT extends PerPlacementTvfTestBase {
     private static final Logger LOGGER = LoggerFactory.getLogger(PerPlacementTvfGoogleSqlIT.class);
 
     @Test
-    public void shouldReadEastPlacementOnlyFromEastTvfGoogleSql() throws Exception {
-        shouldReadEastPlacementOnlyFromEastTvf(Dialect.GOOGLE_STANDARD_SQL, LOGGER);
+    public void shouldReadEachPlacementOnlyFromItsTvfGoogleSql() throws Exception {
+        shouldReadEachPlacementOnlyFromItsTvf(Dialect.GOOGLE_STANDARD_SQL, LOGGER);
     }
 }
