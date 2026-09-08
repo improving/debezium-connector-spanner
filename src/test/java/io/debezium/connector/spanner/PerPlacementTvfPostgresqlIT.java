@@ -12,12 +12,12 @@ import org.slf4j.LoggerFactory;
 import com.google.cloud.spanner.Dialect;
 
 @RealSpannerCompatible
-public class PerPlacementTvfGoogleSqlIT extends PerPlacementTvfTestBase {
+public class PerPlacementTvfPostgresqlIT extends PerPlacementTvfTestBase {
 
-    private static final Logger LOGGER = LoggerFactory.getLogger(PerPlacementTvfGoogleSqlIT.class);
+    private static final Logger LOGGER = LoggerFactory.getLogger(PerPlacementTvfPostgresqlIT.class);
 
     @Test
-    public void shouldReadEastPlacementOnlyFromEastTvfGoogleSql() throws Exception {
-        shouldReadEastPlacementOnlyFromEastTvf(Dialect.GOOGLE_STANDARD_SQL, LOGGER);
+    public void shouldReadEastPlacementOnlyFromEastTvfPostgresql() throws Exception {
+        shouldReadEastPlacementOnlyFromEastTvf(Dialect.POSTGRESQL, LOGGER);
     }
 }

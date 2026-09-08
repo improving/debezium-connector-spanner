@@ -325,10 +325,15 @@ public class Connection {
     }
 
     public List<String> readPlacementTvfNames(String changeStreamName) {
-        Statement statement = Statement.newBuilder("SELECT routine_name FROM information_schema.routines " +
-                "WHERE routine_type LIKE '%FUNCTION' AND STARTS_WITH(routine_name, @prefix) ORDER BY routine_name")
-                .bind("prefix")
-                .to("READ_" + changeStreamName + "_")
+        String prefix = isPostgres()
+                ? "read_proto_bytes_" + changeStreamName.toLowerCase() + "_"
+                : "READ_" + changeStreamName + "_";
+        String sql = "SELECT routine_name FROM information_schema.routines " +
+                "WHERE routine_type LIKE '%FUNCTION' AND routine_name LIKE " + (isPostgres() ? "$1" : "@prefix") +
+                " ORDER BY routine_name";
+        Statement statement = Statement.newBuilder(sql)
+                .bind(isPostgres() ? "p1" : "prefix")
+                .to(prefix + "%")
                 .build();
         List<String> names = new ArrayList<>();
         try (ResultSet resultSet = executeSelect(statement)) {
