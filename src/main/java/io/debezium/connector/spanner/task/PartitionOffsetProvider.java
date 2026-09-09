@@ -125,12 +125,6 @@ public class PartitionOffsetProvider {
                 .map(partitionState -> new SpannerPartition(partitionState.getToken(), partitionState.getTvfName()).getSourcePartition())
                 .collect(Collectors.toList());
 
-        Map<Map<String, String>, PartitionKey> identityByPartitionMap = partitionStates.stream()
-                .collect(Collectors.toMap(
-                        partitionState -> new SpannerPartition(partitionState.getToken(), partitionState.getTvfName()).getSourcePartition(),
-                        PartitionState::getKey,
-                        (a, b) -> a));
-
         Map<Map<String, String>, Map<String, Object>> result;
         Future<Map<Map<String, String>, Map<String, Object>>> future = executor.submit(
                 () -> this.offsetStorageReader.offsets(partitionsMapList));
@@ -163,12 +157,13 @@ public class PartitionOffsetProvider {
         Map<PartitionKey, Timestamp> map = new HashMap<>();
 
         for (Map.Entry<Map<String, String>, Map<String, Object>> entry : result.entrySet()) {
-            PartitionKey identity = identityByPartitionMap.get(entry.getKey());
-            if (identity == null) {
-                LOGGER.warn("Retrieved offset for unknown partition {}", entry.getKey());
+            String token = SpannerPartition.extractToken(entry.getKey());
+            if (token == null) {
+                LOGGER.warn("Retrieved offset without a partition token {}", entry.getKey());
                 continue;
             }
-            map.put(identity, PartitionOffset.extractOffset(entry.getValue()));
+            PartitionKey key = new PartitionKey(token, SpannerPartition.extractTvfName(entry.getKey()));
+            map.put(key, PartitionOffset.extractOffset(entry.getValue()));
         }
 
         return map;
