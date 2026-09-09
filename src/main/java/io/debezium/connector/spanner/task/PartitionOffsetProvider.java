@@ -29,6 +29,7 @@ import com.google.cloud.Timestamp;
 
 import io.debezium.connector.spanner.SpannerPartition;
 import io.debezium.connector.spanner.context.offset.PartitionOffset;
+import io.debezium.connector.spanner.db.model.PartitionKey;
 import io.debezium.connector.spanner.kafka.internal.model.PartitionState;
 import io.debezium.connector.spanner.metrics.MetricsEventPublisher;
 import io.debezium.connector.spanner.metrics.event.OffsetReceivingTimeMetricEvent;
@@ -117,17 +118,17 @@ public class PartitionOffsetProvider {
         return PartitionOffset.extractOffset(result);
     }
 
-    public Map<String, Timestamp> getOffsets(Collection<PartitionState> partitionStates) {
+    public Map<PartitionKey, Timestamp> getOffsets(Collection<PartitionState> partitionStates) {
         Instant startTime = Instant.now();
 
         List<Map<String, String>> partitionsMapList = partitionStates.stream()
                 .map(partitionState -> new SpannerPartition(partitionState.getToken(), partitionState.getTvfName()).getSourcePartition())
                 .collect(Collectors.toList());
 
-        Map<Map<String, String>, String> identityByPartitionMap = partitionStates.stream()
+        Map<Map<String, String>, PartitionKey> identityByPartitionMap = partitionStates.stream()
                 .collect(Collectors.toMap(
                         partitionState -> new SpannerPartition(partitionState.getToken(), partitionState.getTvfName()).getSourcePartition(),
-                        PartitionState::getIdentity,
+                        PartitionState::getKey,
                         (a, b) -> a));
 
         Map<Map<String, String>, Map<String, Object>> result;
@@ -159,10 +160,10 @@ public class PartitionOffsetProvider {
 
         metricsEventPublisher.publishMetricEvent(OffsetReceivingTimeMetricEvent.from(startTime));
 
-        Map<String, Timestamp> map = new HashMap<>();
+        Map<PartitionKey, Timestamp> map = new HashMap<>();
 
         for (Map.Entry<Map<String, String>, Map<String, Object>> entry : result.entrySet()) {
-            String identity = identityByPartitionMap.get(entry.getKey());
+            PartitionKey identity = identityByPartitionMap.get(entry.getKey());
             if (identity == null) {
                 LOGGER.warn("Retrieved offset for unknown partition {}", entry.getKey());
                 continue;

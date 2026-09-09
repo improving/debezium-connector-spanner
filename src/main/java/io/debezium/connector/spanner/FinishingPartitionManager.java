@@ -13,6 +13,7 @@ import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import io.debezium.connector.spanner.db.model.PartitionKey;
 import io.debezium.connector.spanner.task.TaskUid;
 import io.debezium.function.BlockingConsumer;
 
@@ -141,16 +142,16 @@ public class FinishingPartitionManager {
         lastCommittedRecord.remove(partition);
     }
 
-    public Set<String> getPendingFinishPartitions() {
+    public Set<PartitionKey> getPendingFinishPartitions() {
         return partitionPendingFinish.entrySet().stream()
                 .filter(entry -> entry.getValue().equals(true))
-                .map(entry -> entry.getKey().getIdentity())
+                .map(entry -> entry.getKey().getKey())
                 .collect(Collectors.toSet());
     }
 
-    public Set<String> getPendingPartitions() {
+    public Set<PartitionKey> getPendingPartitions() {
         return partitionPendingFinish.keySet().stream()
-                .map(SpannerPartition::getIdentity)
+                .map(SpannerPartition::getKey)
                 .collect(Collectors.toSet());
     }
 

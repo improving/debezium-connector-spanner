@@ -11,6 +11,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
+import io.debezium.connector.spanner.db.model.PartitionKey;
+
 class PartitionThreadPoolTest {
 
     @Test
@@ -43,7 +45,7 @@ class PartitionThreadPoolTest {
 
         partitionThreadPool.stop("token", "tvfA");
         assertEquals(1, partitionThreadPool.getActivePartitions().size());
-        assertTrue(partitionThreadPool.getActivePartitions().contains(new PartitionThreadPool.PartitionKey("token", "tvfB")));
+        assertTrue(partitionThreadPool.getActivePartitions().contains(new PartitionKey("token", "tvfB")));
 
         partitionThreadPool.shutdown("taskuid");
     }

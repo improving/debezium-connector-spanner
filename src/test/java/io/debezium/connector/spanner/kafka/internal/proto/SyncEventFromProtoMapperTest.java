@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 
 import com.google.cloud.Timestamp;
 
+import io.debezium.connector.spanner.db.model.PartitionKey;
 import io.debezium.connector.spanner.kafka.event.proto.SyncEventProtos;
 import io.debezium.connector.spanner.kafka.internal.model.MessageTypeEnum;
 import io.debezium.connector.spanner.kafka.internal.model.PartitionState;
@@ -88,13 +89,13 @@ class SyncEventFromProtoMapperTest {
         assertThat(taskState1.getStateTimestamp()).isEqualTo(protoState1.getStateTimestamp());
 
         assertThat(taskState1.getPartitionsMap()).hasSize(2);
-        PartitionState partition1 = taskState1.getPartitionsMap().get(protoPartition1.getToken());
+        PartitionState partition1 = taskState1.getPartitionsMap().get(new PartitionKey(protoPartition1.getToken(), null));
         assertPartition(partition1, protoPartition1, PartitionStateEnum.CREATED);
-        PartitionState partition2 = taskState1.getPartitionsMap().get(protoPartition2.getToken());
+        PartitionState partition2 = taskState1.getPartitionsMap().get(new PartitionKey(protoPartition2.getToken(), null));
         assertPartition(partition2, protoPartition2, PartitionStateEnum.READY_FOR_STREAMING);
 
         assertThat(taskState1.getSharedPartitions()).hasSize(1);
-        PartitionState shared2 = taskState1.getPartitionsMap().get(protoPartition2.getToken());
+        PartitionState shared2 = taskState1.getPartitionsMap().get(new PartitionKey(protoPartition2.getToken(), null));
         assertPartition(shared2, protoPartition2, PartitionStateEnum.READY_FOR_STREAMING);
 
         TaskState taskState2 = taskSyncEvent.getTaskStates().get(protoState2.getTaskUid());
@@ -104,7 +105,7 @@ class SyncEventFromProtoMapperTest {
         assertThat(taskState2.getStateTimestamp()).isEqualTo(protoState2.getStateTimestamp());
 
         assertThat(taskState2.getPartitionsMap()).hasSize(1);
-        PartitionState partition22 = taskState2.getPartitionsMap().get(protoPartition2.getToken());
+        PartitionState partition22 = taskState2.getPartitionsMap().get(new PartitionKey(protoPartition2.getToken(), null));
         assertPartition(partition22, protoPartition2, PartitionStateEnum.READY_FOR_STREAMING);
         assertThat(taskState2.getSharedPartitionsMap()).isEmpty();
     }
@@ -134,7 +135,7 @@ class SyncEventFromProtoMapperTest {
         TaskState taskState = SyncEventFromProtoMapper.mapFromProto(protoEvent).getTaskStates().get("task");
 
         assertThat(taskState.getPartitionsMap()).containsOnlyKeys(
-                "sameToken#READ_Stream_US", "sameToken#READ_Stream_EU");
+                new PartitionKey("sameToken", "READ_Stream_US"), new PartitionKey("sameToken", "READ_Stream_EU"));
         assertThat(taskState.getPartitions()).extracting(PartitionState::getTvfName)
                 .containsExactlyInAnyOrder("READ_Stream_US", "READ_Stream_EU");
     }
@@ -156,7 +157,7 @@ class SyncEventFromProtoMapperTest {
 
         TaskState taskState = SyncEventFromProtoMapper.mapFromProto(protoEvent).getTaskStates().get("task");
 
-        assertThat(taskState.getPartitionsMap()).containsOnlyKeys("legacyToken");
+        assertThat(taskState.getPartitionsMap()).containsOnlyKeys(new PartitionKey("legacyToken", null));
         assertThat(taskState.getPartitions().iterator().next().getTvfName()).isNull();
     }
 

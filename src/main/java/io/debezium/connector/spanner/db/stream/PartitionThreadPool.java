@@ -6,7 +6,6 @@
 package io.debezium.connector.spanner.db.stream;
 
 import java.time.Duration;
-import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -16,6 +15,7 @@ import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import io.debezium.connector.spanner.db.model.PartitionKey;
 import io.debezium.util.Clock;
 import io.debezium.util.Metronome;
 
@@ -109,46 +109,6 @@ public class PartitionThreadPool {
     public Set<PartitionKey> getActivePartitions() {
         clean();
         return Set.copyOf(threadMap.keySet());
-    }
-
-    public static final class PartitionKey {
-        private final String token;
-        private final String tvfName;
-
-        public PartitionKey(String token, String tvfName) {
-            this.token = token;
-            this.tvfName = tvfName;
-        }
-
-        public String getToken() {
-            return token;
-        }
-
-        public String getTvfName() {
-            return tvfName;
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) {
-                return true;
-            }
-            if (o == null || getClass() != o.getClass()) {
-                return false;
-            }
-            PartitionKey that = (PartitionKey) o;
-            return Objects.equals(token, that.token) && Objects.equals(tvfName, that.tvfName);
-        }
-
-        @Override
-        public int hashCode() {
-            return Objects.hash(token, tvfName);
-        }
-
-        @Override
-        public String toString() {
-            return tvfName == null || tvfName.isBlank() ? token : token + "#" + tvfName;
-        }
     }
 
 }

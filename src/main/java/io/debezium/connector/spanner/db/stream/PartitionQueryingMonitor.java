@@ -20,9 +20,9 @@ import org.slf4j.LoggerFactory;
 import com.google.common.annotations.VisibleForTesting;
 
 import io.debezium.connector.spanner.db.model.InitialPartition;
+import io.debezium.connector.spanner.db.model.PartitionKey;
 import io.debezium.connector.spanner.db.model.StreamEventMetadata;
 import io.debezium.connector.spanner.db.model.event.ChangeStreamEvent;
-import io.debezium.connector.spanner.db.stream.PartitionThreadPool.PartitionKey;
 import io.debezium.connector.spanner.db.stream.exception.ChangeStreamException;
 import io.debezium.connector.spanner.db.stream.exception.FailureChangeStreamException;
 import io.debezium.connector.spanner.metrics.MetricsEventPublisher;

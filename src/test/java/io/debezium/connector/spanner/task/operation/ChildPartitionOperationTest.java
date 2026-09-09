@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import com.google.cloud.Timestamp;
 
 import io.debezium.connector.spanner.db.model.Partition;
+import io.debezium.connector.spanner.db.model.PartitionKey;
 import io.debezium.connector.spanner.kafka.internal.model.PartitionState;
 import io.debezium.connector.spanner.kafka.internal.model.PartitionStateEnum;
 import io.debezium.connector.spanner.kafka.internal.model.TaskState;
@@ -167,9 +168,9 @@ class ChildPartitionOperationTest {
                 "sameToken", "READ_Stream_US", PartitionStateEnum.RUNNING).doOperation(context);
 
         Assertions.assertEquals(PartitionStateEnum.RUNNING,
-                updated.getCurrentTaskState().getPartitionsMap().get("sameToken#READ_Stream_US").getState());
+                updated.getCurrentTaskState().getPartitionsMap().get(new PartitionKey("sameToken", "READ_Stream_US")).getState());
         Assertions.assertEquals(PartitionStateEnum.CREATED,
-                updated.getCurrentTaskState().getPartitionsMap().get("sameToken#READ_Stream_EU").getState());
+                updated.getCurrentTaskState().getPartitionsMap().get(new PartitionKey("sameToken", "READ_Stream_EU")).getState());
     }
 
     @Test
@@ -181,9 +182,9 @@ class ChildPartitionOperationTest {
                 "sameToken", "READ_Stream_EU", processedTimestamp, "sequence").doOperation(context);
 
         Assertions.assertNull(updated.getCurrentTaskState().getPartitionsMap()
-                .get("sameToken#READ_Stream_US").getProcessedTimestamp());
+                .get(new PartitionKey("sameToken", "READ_Stream_US")).getProcessedTimestamp());
         Assertions.assertEquals(processedTimestamp, updated.getCurrentTaskState().getPartitionsMap()
-                .get("sameToken#READ_Stream_EU").getProcessedTimestamp());
+                .get(new PartitionKey("sameToken", "READ_Stream_EU")).getProcessedTimestamp());
     }
 
     private TaskSyncContext buildContextWithSameTokenAcrossTvfs() {

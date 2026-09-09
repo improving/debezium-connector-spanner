@@ -22,6 +22,7 @@ import org.slf4j.LoggerFactory;
 
 import io.debezium.connector.spanner.db.model.InitialPartition;
 import io.debezium.connector.spanner.db.model.Partition;
+import io.debezium.connector.spanner.db.model.PartitionKey;
 import io.debezium.connector.spanner.kafka.internal.model.PartitionState;
 import io.debezium.connector.spanner.kafka.internal.model.PartitionStateEnum;
 import io.debezium.connector.spanner.kafka.internal.model.TaskState;
@@ -138,16 +139,16 @@ public class ChildPartitionOperation implements Operation {
         final Collection<TaskState> taskStates = taskSyncContext.getAllTaskStates().values();
 
         Map<String, Integer> candidateMap = taskStates.stream().map(taskState -> {
-            Set<String> tokens = taskState.getPartitions().stream()
+            Set<PartitionKey> tokens = taskState.getPartitions().stream()
                     .filter(partitionState -> !PartitionStateEnum.FINISHED.equals(partitionState.getState()) &&
                             !PartitionStateEnum.REMOVED.equals(partitionState.getState()))
-                    .map(PartitionState::getIdentity)
+                    .map(PartitionState::getKey)
                     .collect(Collectors.toCollection(HashSet::new));
 
-            Set<String> assignedTokens = taskStates.stream()
+            Set<PartitionKey> assignedTokens = taskStates.stream()
                     .flatMap(taskState1 -> taskState1.getSharedPartitions().stream())
                     .filter(partitionState -> partitionState.getAssigneeTaskUid().equals(taskState.getTaskUid()))
-                    .map(PartitionState::getIdentity)
+                    .map(PartitionState::getKey)
                     .collect(Collectors.toSet());
 
             tokens.addAll(assignedTokens);

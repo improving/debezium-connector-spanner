@@ -9,6 +9,7 @@ import java.util.Map;
 import java.util.Objects;
 
 import io.debezium.connector.spanner.db.model.InitialPartition;
+import io.debezium.connector.spanner.db.model.PartitionKey;
 import io.debezium.pipeline.spi.Partition;
 
 /**
@@ -57,8 +58,8 @@ public class SpannerPartition implements Partition {
         return tvfName;
     }
 
-    public String getIdentity() {
-        return tvfName == null || tvfName.isBlank() ? partitionToken : partitionToken + "#" + tvfName;
+    public PartitionKey getKey() {
+        return new PartitionKey(partitionToken, tvfName);
     }
 
     public static String extractToken(Map<String, ?> sourcePartition) {

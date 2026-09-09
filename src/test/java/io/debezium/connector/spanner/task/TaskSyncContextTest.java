@@ -14,6 +14,7 @@ import java.util.Set;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
+import io.debezium.connector.spanner.db.model.PartitionKey;
 import io.debezium.connector.spanner.kafka.internal.model.MessageTypeEnum;
 import io.debezium.connector.spanner.kafka.internal.model.PartitionState;
 import io.debezium.connector.spanner.kafka.internal.model.PartitionStateEnum;
@@ -162,7 +163,8 @@ class TaskSyncContextTest {
         Assertions.assertEquals(2, event.getNumPartitions());
         Assertions.assertEquals(1, event.getNumSharedPartitions());
         Assertions.assertEquals(3, TaskStateUtil.totalInProgressPartitions(context));
-        Assertions.assertEquals(Set.of("token#tvfA", "token#tvfB", "token#tvfC"), TaskStateUtil.allPartitionTokens(context));
+        Assertions.assertEquals(Set.of(new PartitionKey("token", "tvfA"), new PartitionKey("token", "tvfB"),
+                new PartitionKey("token", "tvfC")), TaskStateUtil.allPartitionTokens(context));
     }
 
     private TaskSyncContext buildEmptyTaskSyncContext() {

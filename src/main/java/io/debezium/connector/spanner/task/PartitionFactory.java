@@ -20,6 +20,7 @@ import com.google.cloud.Timestamp;
 
 import io.debezium.connector.spanner.db.model.InitialPartition;
 import io.debezium.connector.spanner.db.model.Partition;
+import io.debezium.connector.spanner.db.model.PartitionKey;
 import io.debezium.connector.spanner.kafka.internal.model.PartitionState;
 import io.debezium.connector.spanner.metrics.MetricsEventPublisher;
 import io.debezium.connector.spanner.metrics.event.PartitionOffsetLagMetricEvent;
@@ -66,7 +67,7 @@ public class PartitionFactory {
      * Creates the root partition(s) to start streaming from. When the change stream is configured
      * with {@code gcp.spanner.placement.tvf.names}, each placement TVF has its own independent
      * partition token space on the Spanner side, so one root partition per configured TVF name is
-     * created here (each with a distinct token, see {@link InitialPartition#tokenFor(String)}), and
+     * created here (each identified by the raw root token and its TVF name), and
      * every partition discovered afterwards inherits its parent's {@code tvfName} (see
      * {@link Partition#getTvfName()}). Otherwise, a single root partition is created, matching the
      * default (non per-placement-TVF) behavior.
@@ -79,7 +80,7 @@ public class PartitionFactory {
         List<Partition> partitions = new ArrayList<>();
         for (String tvfName : placementTvfNames) {
             Partition partition = Partition.builder()
-                    .token(InitialPartition.tokenFor(tvfName))
+                    .token(InitialPartition.PARTITION_TOKEN)
                     .parentTokens(Set.of())
                     .startTimestamp(startTime)
                     .endTimestamp(endTime)
@@ -92,15 +93,15 @@ public class PartitionFactory {
         return partitions;
     }
 
-    public Map<String, Partition> getPartitions(List<PartitionState> partitionStates) {
-        Map<String, Timestamp> offsets = partitionOffsetProvider.getOffsets(partitionStates);
+    public Map<PartitionKey, Partition> getPartitions(List<PartitionState> partitionStates) {
+        Map<PartitionKey, Timestamp> offsets = partitionOffsetProvider.getOffsets(partitionStates);
 
-        Map<String, Partition> partitionMap = new HashMap<>();
+        Map<PartitionKey, Partition> partitionMap = new HashMap<>();
         for (PartitionState partitionState : partitionStates) {
-            Timestamp offset = offsets.get(partitionState.getIdentity());
+            Timestamp offset = offsets.get(partitionState.getKey());
             Timestamp startTime = resolveOffset(partitionState, offset);
 
-            partitionMap.put(partitionState.getIdentity(), Partition.builder()
+            partitionMap.put(partitionState.getKey(), Partition.builder()
                     .token(partitionState.getToken())
                     .startTimestamp(startTime)
                     .endTimestamp(partitionState.getEndTimestamp())

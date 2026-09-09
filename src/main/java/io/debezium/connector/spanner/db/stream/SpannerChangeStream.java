@@ -22,6 +22,7 @@ import com.google.common.annotations.VisibleForTesting;
 
 import io.debezium.connector.spanner.db.DatabaseClientFactory;
 import io.debezium.connector.spanner.db.model.Partition;
+import io.debezium.connector.spanner.db.model.PartitionKey;
 import io.debezium.connector.spanner.db.model.event.ChangeStreamEvent;
 import io.debezium.connector.spanner.db.stream.exception.ChangeStreamException;
 import io.debezium.connector.spanner.db.stream.exception.FailureChangeStreamException;
@@ -185,7 +186,7 @@ public class SpannerChangeStream implements ChangeStream {
 
     @VisibleForTesting
     void onStuckPartition(String token, String tvfName) throws InterruptedException {
-        LOGGER.warn("Partition {} is stuck", new PartitionThreadPool.PartitionKey(token, tvfName));
+        LOGGER.warn("Partition {} is stuck", new PartitionKey(token, tvfName));
         this.partitionThreadPool.stop(token, tvfName);
         if (this.partitionEventListener.onStuckPartition(token, tvfName)) {
             this.onError(new StuckPartitionException(token));

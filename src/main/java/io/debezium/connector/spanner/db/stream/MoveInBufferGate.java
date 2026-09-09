@@ -18,6 +18,7 @@ import java.util.stream.Collectors;
 import com.google.cloud.Timestamp;
 
 import io.debezium.connector.spanner.db.dao.ChangeStreamResultSetMetadata;
+import io.debezium.connector.spanner.db.model.PartitionKey;
 import io.debezium.connector.spanner.db.model.event.ChangeStreamEvent;
 import io.debezium.connector.spanner.db.model.event.PartitionEventEvent;
 import io.debezium.connector.spanner.task.MoveInGateChecker;
@@ -188,7 +189,7 @@ public class MoveInBufferGate {
             return List.of();
         }
         TaskSyncContext ctx = taskSyncContextSupplier.get();
-        Set<String> finished = MoveInGateChecker.getFinishedPartitions(ctx);
+        Set<PartitionKey> finished = MoveInGateChecker.getFinishedPartitions(ctx);
 
         List<ChangeStreamEvent> result = new ArrayList<>();
         while (!segments.isEmpty()) {

@@ -12,6 +12,7 @@ import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import io.debezium.connector.spanner.db.model.PartitionKey;
 import io.debezium.connector.spanner.kafka.internal.model.MoveInState;
 import io.debezium.connector.spanner.kafka.internal.model.PartitionState;
 import io.debezium.connector.spanner.kafka.internal.model.PartitionStateEnum;
@@ -42,7 +43,7 @@ public class FindPartitionForStreamingOperation implements Operation {
     }
 
     private TaskSyncContext takePartitionForStreaming(TaskSyncContext taskSyncContext) {
-        Set<String> finishedPartitions = MoveInGateChecker.getFinishedPartitions(taskSyncContext);
+        Set<PartitionKey> finishedPartitions = MoveInGateChecker.getFinishedPartitions(taskSyncContext);
 
         io.debezium.connector.spanner.kafka.internal.model.TaskState taskState = taskSyncContext.getCurrentTaskState();
         List<PartitionState> partitions = taskState.getPartitions().stream()
@@ -123,7 +124,7 @@ public class FindPartitionForStreamingOperation implements Operation {
      * timestamp its change stream has necessarily already read through that boundary for real, so
      * it is safe to treat the MoveOut as satisfied despite the missing local bookkeeping.
      */
-    private boolean canDestPartitionContinue(TaskSyncContext taskSyncContext, PartitionState destPartition, Set<String> finishedPartitions) {
+    private boolean canDestPartitionContinue(TaskSyncContext taskSyncContext, PartitionState destPartition, Set<PartitionKey> finishedPartitions) {
         MoveInState moveInState = destPartition.getMoveInState();
         return MoveInGateChecker.canContinue(
                 taskSyncContext,
@@ -143,12 +144,8 @@ public class FindPartitionForStreamingOperation implements Operation {
         return false;
     }
 
-    private static Set<String> toIdentities(Set<String> tokens, String tvfName) {
-        return tokens.stream().map(t -> toIdentity(t, tvfName)).collect(Collectors.toSet());
-    }
-
-    private static String toIdentity(String token, String tvfName) {
-        return tvfName == null || tvfName.isBlank() ? token : token + "#" + tvfName;
+    private static Set<PartitionKey> toIdentities(Set<String> tokens, String tvfName) {
+        return tokens.stream().map(token -> new PartitionKey(token, tvfName)).collect(Collectors.toSet());
     }
 
     @Override

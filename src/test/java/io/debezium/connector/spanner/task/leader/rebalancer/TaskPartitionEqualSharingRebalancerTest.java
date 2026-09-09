@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
+import io.debezium.connector.spanner.db.model.PartitionKey;
 import io.debezium.connector.spanner.kafka.internal.model.PartitionState;
 import io.debezium.connector.spanner.kafka.internal.model.PartitionStateEnum;
 import io.debezium.connector.spanner.kafka.internal.model.TaskState;
@@ -30,8 +31,8 @@ class TaskPartitionEqualSharingRebalancerTest {
         TaskState result = new TaskPartitionGreedyLeaderRebalancer()
                 .rebalance(leader, Map.of("leader", leader), Map.of("obsolete", obsolete));
 
-        Assertions.assertEquals(Set.of("token#tvfA", "token#tvfB"), result.getPartitions().stream()
-                .map(PartitionState::getIdentity)
+        Assertions.assertEquals(Set.of(new PartitionKey("token", "tvfA"), new PartitionKey("token", "tvfB")), result.getPartitions().stream()
+                .map(PartitionState::getKey)
                 .collect(Collectors.toSet()));
     }
 
@@ -43,8 +44,8 @@ class TaskPartitionEqualSharingRebalancerTest {
         TaskState result = new TaskPartitionEqualSharingRebalancer()
                 .rebalance(leader, Map.of("leader", leader), Map.of("obsolete", obsolete));
 
-        Assertions.assertEquals(Set.of("token#tvfA", "token#tvfB"), result.getPartitions().stream()
-                .map(PartitionState::getIdentity)
+        Assertions.assertEquals(Set.of(new PartitionKey("token", "tvfA"), new PartitionKey("token", "tvfB")), result.getPartitions().stream()
+                .map(PartitionState::getKey)
                 .collect(Collectors.toSet()));
     }
 

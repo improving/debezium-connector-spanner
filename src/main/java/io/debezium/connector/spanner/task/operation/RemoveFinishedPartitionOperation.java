@@ -22,6 +22,7 @@ import io.debezium.connector.spanner.SpannerConnectorConfig;
 import io.debezium.connector.spanner.SpannerPartition;
 import io.debezium.connector.spanner.context.offset.PartitionOffset;
 import io.debezium.connector.spanner.context.offset.SpannerOffsetContext;
+import io.debezium.connector.spanner.db.model.PartitionKey;
 import io.debezium.connector.spanner.kafka.internal.model.MoveOutState;
 import io.debezium.connector.spanner.kafka.internal.model.PartitionState;
 import io.debezium.connector.spanner.kafka.internal.model.PartitionStateEnum;
@@ -122,10 +123,10 @@ public class RemoveFinishedPartitionOperation implements Operation {
     }
 
     private static boolean allChildrenFinished(List<PartitionState> allPartitionStates, PartitionState source) {
-        Set<String> children = allPartitionStates.stream()
+        Set<PartitionKey> children = allPartitionStates.stream()
                 .filter(partitionState -> Objects.equals(source.getTvfName(), partitionState.getTvfName()))
                 .filter(partitionState -> partitionState.getParents().contains(source.getToken()))
-                .map(PartitionState::getIdentity)
+                .map(PartitionState::getKey)
                 .collect(Collectors.toSet());
 
         return children.isEmpty()
@@ -133,7 +134,7 @@ public class RemoveFinishedPartitionOperation implements Operation {
                         .allMatch(
                                 childIdentity -> {
                                     return allPartitionStates.stream()
-                                            .filter(partitionState -> childIdentity.equals(partitionState.getIdentity()))
+                                            .filter(partitionState -> childIdentity.equals(partitionState.getKey()))
                                             .allMatch(
                                                     partitionState -> PartitionStateEnum.FINISHED.equals(partitionState.getState())
                                                             || PartitionStateEnum.REMOVED.equals(partitionState.getState()));

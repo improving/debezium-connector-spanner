@@ -16,6 +16,7 @@ import org.slf4j.LoggerFactory;
 
 import com.google.cloud.Timestamp;
 
+import io.debezium.connector.spanner.db.model.PartitionKey;
 import io.debezium.connector.spanner.kafka.internal.model.MoveOutState;
 import io.debezium.connector.spanner.kafka.internal.model.PartitionState;
 import io.debezium.connector.spanner.kafka.internal.model.PartitionStateEnum;
@@ -43,10 +44,10 @@ public final class MoveInGateChecker {
     /**
      * Returns the set of partition identities that are in {@code FINISHED} or {@code REMOVED}
      * state across all task states visible in {@code taskSyncContext}. The identity is the
-     * same as {@link PartitionState#getIdentity()} so callers can scope membership checks by
+     * same as {@link PartitionState#getKey()} so callers can scope membership checks by
      * the destination partition's TVF name.
      */
-    public static Set<String> getFinishedPartitions(TaskSyncContext taskSyncContext) {
+    public static Set<PartitionKey> getFinishedPartitions(TaskSyncContext taskSyncContext) {
         List<PartitionState> all = new ArrayList<>();
         all.addAll(taskSyncContext.getCurrentTaskState().getPartitions());
         taskSyncContext.getTaskStates().values()
@@ -55,7 +56,7 @@ public final class MoveInGateChecker {
         return all.stream()
                 .filter(ps -> PartitionStateEnum.FINISHED.equals(ps.getState())
                         || PartitionStateEnum.REMOVED.equals(ps.getState()))
-                .map(PartitionState::getIdentity)
+                .map(PartitionState::getKey)
                 .collect(Collectors.toSet());
     }
 
@@ -72,7 +73,7 @@ public final class MoveInGateChecker {
      */
     public static boolean canContinue(TaskSyncContext taskSyncContext, String destToken, String destTvfName,
                                       Timestamp moveInTimestamp, List<String> sourceTokens,
-                                      Set<String> finishedPartitions) {
+                                      Set<PartitionKey> finishedPartitions) {
         for (String sourceToken : sourceTokens) {
             if (!sourceHasResumedThisMove(taskSyncContext, sourceToken, moveInTimestamp, destToken, finishedPartitions, destTvfName)) {
                 return false;
@@ -91,7 +92,7 @@ public final class MoveInGateChecker {
                                                    String sourceToken,
                                                    Timestamp moveInTimestamp,
                                                    String destToken,
-                                                   Set<String> finishedPartitions,
+                                                   Set<PartitionKey> finishedPartitions,
                                                    String tvfName) {
         boolean satisfiedByMoveOutState = findMoveOutStates(taskSyncContext, sourceToken, tvfName).stream()
                 .anyMatch(mos -> {
@@ -101,7 +102,7 @@ public final class MoveInGateChecker {
         if (satisfiedByMoveOutState) {
             return true;
         }
-        String sourceIdentity = toIdentity(sourceToken, tvfName);
+        PartitionKey sourceIdentity = new PartitionKey(sourceToken, tvfName);
         if (finishedPartitions.contains(sourceIdentity)) {
             LOGGER.info("Source partition {} already finished/removed, treating MoveOut as satisfied for destination {}",
                     sourceIdentity, destToken);
@@ -155,7 +156,4 @@ public final class MoveInGateChecker {
         return partition.getToken().equals(token) && Objects.equals(partition.getTvfName(), tvfName);
     }
 
-    private static String toIdentity(String token, String tvfName) {
-        return tvfName == null || tvfName.isBlank() ? token : token + "#" + tvfName;
-    }
 }

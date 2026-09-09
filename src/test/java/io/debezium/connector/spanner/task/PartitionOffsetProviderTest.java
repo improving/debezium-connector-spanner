@@ -23,6 +23,7 @@ import org.junit.jupiter.api.Test;
 
 import com.google.cloud.Timestamp;
 
+import io.debezium.connector.spanner.db.model.PartitionKey;
 import io.debezium.connector.spanner.kafka.internal.model.PartitionState;
 import io.debezium.connector.spanner.kafka.internal.model.PartitionStateEnum;
 import io.debezium.connector.spanner.metrics.MetricsEventPublisher;
@@ -44,10 +45,10 @@ class PartitionOffsetProviderTest {
         when(reader.offsets(any())).thenAnswer(invocation -> offsets);
 
         PartitionOffsetProvider provider = new PartitionOffsetProvider(reader, metricsPublisher, 30000L);
-        Map<String, Timestamp> result = provider.getOffsets(List.of(partitionState));
+        Map<PartitionKey, Timestamp> result = provider.getOffsets(List.of(partitionState));
 
         assertEquals(1, result.size());
-        assertEquals(expected, result.get(partitionState.getIdentity()));
+        assertEquals(expected, result.get(partitionState.getKey()));
     }
 
     @Test
@@ -58,7 +59,7 @@ class PartitionOffsetProviderTest {
         when(reader.offsets(any())).thenAnswer(invocation -> null);
 
         PartitionOffsetProvider provider = new PartitionOffsetProvider(reader, metricsPublisher, 30000L);
-        Map<String, Timestamp> result = provider.getOffsets(List.of(partitionState("token1", null)));
+        Map<PartitionKey, Timestamp> result = provider.getOffsets(List.of(partitionState("token1", null)));
 
         assertTrue(result.isEmpty());
     }
@@ -74,7 +75,7 @@ class PartitionOffsetProviderTest {
         });
 
         PartitionOffsetProvider provider = new PartitionOffsetProvider(reader, metricsPublisher, 30000L);
-        Map<String, Timestamp> result = provider.getOffsets(List.of(partitionState("token1", null)));
+        Map<PartitionKey, Timestamp> result = provider.getOffsets(List.of(partitionState("token1", null)));
 
         assertTrue(result.isEmpty());
     }
@@ -99,11 +100,11 @@ class PartitionOffsetProviderTest {
         when(reader.offsets(any())).thenAnswer(invocation -> offsets);
 
         PartitionOffsetProvider provider = new PartitionOffsetProvider(reader, metricsPublisher, 30000L);
-        Map<String, Timestamp> result = provider.getOffsets(List.of(tvfA, tvfB));
+        Map<PartitionKey, Timestamp> result = provider.getOffsets(List.of(tvfA, tvfB));
 
         assertEquals(2, result.size());
-        assertEquals(offsetA, result.get(tvfA.getIdentity()));
-        assertEquals(offsetB, result.get(tvfB.getIdentity()));
+        assertEquals(offsetA, result.get(tvfA.getKey()));
+        assertEquals(offsetB, result.get(tvfB.getKey()));
     }
 
     @Test

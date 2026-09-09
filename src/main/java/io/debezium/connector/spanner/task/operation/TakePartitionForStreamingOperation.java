@@ -17,6 +17,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import io.debezium.connector.spanner.db.model.Partition;
+import io.debezium.connector.spanner.db.model.PartitionKey;
 import io.debezium.connector.spanner.db.stream.ChangeStream;
 import io.debezium.connector.spanner.kafka.internal.model.PartitionState;
 import io.debezium.connector.spanner.kafka.internal.model.PartitionStateEnum;
@@ -53,15 +54,15 @@ public class TakePartitionForStreamingOperation implements Operation {
         }
 
         try {
-            Set<String> toSchedule = new HashSet<>();
+            Set<PartitionKey> toSchedule = new HashSet<>();
 
-            Map<String, Partition> partitionMap = partitionFactory.getPartitions(toStreaming);
+            Map<PartitionKey, Partition> partitionMap = partitionFactory.getPartitions(toStreaming);
 
             toStreaming.forEach(partitionState -> {
                 LOGGER.info("Task {}, submitting the partition for streaming {}", taskSyncContext.getTaskUid(), partitionState);
-                Partition partition = partitionMap.get(partitionState.getIdentity());
+                Partition partition = partitionMap.get(partitionState.getKey());
                 if (partition != null && changeStream.submitPartition(partition)) {
-                    toSchedule.add(partitionState.getIdentity());
+                    toSchedule.add(partitionState.getKey());
                 }
                 else {
                     LOGGER.error("Task {}, failed to submit partition {} with state {}", taskSyncContext.getTaskUid(), partitionState,
@@ -72,7 +73,7 @@ public class TakePartitionForStreamingOperation implements Operation {
 
             List<PartitionState> partitions = taskState.getPartitions().stream()
                     .map(partitionState -> {
-                        if (toSchedule.contains(partitionState.getIdentity())) {
+                        if (toSchedule.contains(partitionState.getKey())) {
                             return partitionState.toBuilder()
                                     .state(PartitionStateEnum.SCHEDULED)
                                     .moveInState(null)
@@ -118,9 +119,9 @@ public class TakePartitionForStreamingOperation implements Operation {
     }
 
     private boolean isPartitionStreamingAlready(Collection<TaskState> taskStates, PartitionState target, String taskUid) {
-        String targetIdentity = target.getIdentity();
+        PartitionKey targetIdentity = target.getKey();
         return taskStates.stream().flatMap(taskState -> taskState.getPartitions().stream())
-                .filter(partitionState -> partitionState.getIdentity().equals(targetIdentity))
+                .filter(partitionState -> partitionState.getKey().equals(targetIdentity))
                 .anyMatch(partitionState -> partitionState.getState().equals(PartitionStateEnum.SCHEDULED)
                         || partitionState.getState().equals(PartitionStateEnum.RUNNING)
                         || partitionState.getState().equals(PartitionStateEnum.FINISHED)
@@ -128,9 +129,9 @@ public class TakePartitionForStreamingOperation implements Operation {
     }
 
     private boolean isPartition(Collection<TaskState> taskStates, PartitionState target) {
-        String targetIdentity = target.getIdentity();
+        PartitionKey targetIdentity = target.getKey();
         return taskStates.stream().flatMap(taskState -> taskState.getPartitions().stream())
-                .filter(partitionState -> partitionState.getIdentity().equals(targetIdentity))
+                .filter(partitionState -> partitionState.getKey().equals(targetIdentity))
                 .anyMatch(partitionState -> partitionState.getState().equals(PartitionStateEnum.SCHEDULED)
                         || partitionState.getState().equals(PartitionStateEnum.RUNNING)
                         || partitionState.getState().equals(PartitionStateEnum.FINISHED)

@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test;
 
 import com.google.cloud.Timestamp;
 
+import io.debezium.connector.spanner.db.model.PartitionKey;
 import io.debezium.connector.spanner.kafka.internal.model.MoveOutState;
 import io.debezium.connector.spanner.kafka.internal.model.PartitionState;
 import io.debezium.connector.spanner.kafka.internal.model.PartitionStateEnum;
@@ -64,9 +65,9 @@ class MoveInGateCheckerTest {
 
         TaskSyncContext ctx = contextWithCurrent(finishedA, finishedB, running);
 
-        Set<String> finished = MoveInGateChecker.getFinishedPartitions(ctx);
+        Set<PartitionKey> finished = MoveInGateChecker.getFinishedPartitions(ctx);
 
-        assertEquals(Set.of("p#tvfA", "p#tvfB"), finished,
+        assertEquals(Set.of(new PartitionKey("p", "tvfA"), new PartitionKey("p", "tvfB")), finished,
                 "finished set must contain TVF-scoped identities, not raw tokens");
     }
 
@@ -75,7 +76,7 @@ class MoveInGateCheckerTest {
         PartitionState source = partition("src", "tvfA", PartitionStateEnum.FINISHED);
         TaskSyncContext ctx = contextWithCurrent(source);
 
-        Set<String> finished = MoveInGateChecker.getFinishedPartitions(ctx);
+        Set<PartitionKey> finished = MoveInGateChecker.getFinishedPartitions(ctx);
 
         assertTrue(MoveInGateChecker.canContinue(ctx, "dst", "tvfA", T1, List.of("src"), finished),
                 "source finished in the destination's TVF must satisfy the gate");
@@ -86,7 +87,7 @@ class MoveInGateCheckerTest {
         PartitionState sourceOtherTvf = partition("src", "tvfB", PartitionStateEnum.FINISHED);
         TaskSyncContext ctx = contextWithCurrent(sourceOtherTvf);
 
-        Set<String> finished = MoveInGateChecker.getFinishedPartitions(ctx);
+        Set<PartitionKey> finished = MoveInGateChecker.getFinishedPartitions(ctx);
 
         assertFalse(MoveInGateChecker.canContinue(ctx, "dst", "tvfA", T1, List.of("src"), finished),
                 "source finished in a different TVF must not satisfy the gate for destination in tvfA");
@@ -100,7 +101,7 @@ class MoveInGateCheckerTest {
                 List.of(new MoveOutState(T1, List.of("dst"))));
         TaskSyncContext ctx = contextWithCurrent(sourceTvfA, sourceTvfB);
 
-        Set<String> finished = MoveInGateChecker.getFinishedPartitions(ctx);
+        Set<PartitionKey> finished = MoveInGateChecker.getFinishedPartitions(ctx);
 
         assertTrue(MoveInGateChecker.canContinue(ctx, "dst", "tvfA", T1, List.of("src"), finished),
                 "MoveOut state from the same TVF must satisfy the gate");
@@ -114,7 +115,7 @@ class MoveInGateCheckerTest {
                 List.of(new MoveOutState(T1, List.of("dst"))));
         TaskSyncContext ctx = contextWithCurrent(sourceTvfB);
 
-        Set<String> finished = MoveInGateChecker.getFinishedPartitions(ctx);
+        Set<PartitionKey> finished = MoveInGateChecker.getFinishedPartitions(ctx);
 
         assertFalse(MoveInGateChecker.canContinue(ctx, "dst", "tvfA", T1, List.of("src"), finished),
                 "MoveOut state from a different TVF must not satisfy the gate for destination in tvfA");

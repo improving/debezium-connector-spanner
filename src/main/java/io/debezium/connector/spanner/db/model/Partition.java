@@ -86,8 +86,8 @@ public class Partition {
         return tvfName;
     }
 
-    public String getIdentity() {
-        return tvfName == null || tvfName.isBlank() ? partitionToken : partitionToken + "#" + tvfName;
+    public PartitionKey getKey() {
+        return new PartitionKey(partitionToken, tvfName);
     }
 
     public Builder toBuilder() {

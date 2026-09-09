@@ -11,6 +11,8 @@ import java.util.Set;
 
 import com.google.cloud.Timestamp;
 
+import io.debezium.connector.spanner.db.model.PartitionKey;
+
 /**
  * Contains information about the current state
  * of the Spanner partition
@@ -271,8 +273,8 @@ public class PartitionState implements Comparable<PartitionState> {
         return tvfName;
     }
 
-    public String getIdentity() {
-        return tvfName == null || tvfName.isBlank() ? token : token + "#" + tvfName;
+    public PartitionKey getKey() {
+        return new PartitionKey(token, tvfName);
     }
 
     @Override
@@ -284,20 +286,18 @@ public class PartitionState implements Comparable<PartitionState> {
             return false;
         }
         PartitionState that = (PartitionState) o;
-        return Objects.equals(token, that.token);
+        return Objects.equals(token, that.token) && Objects.equals(tvfName, that.tvfName);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(token);
+        return Objects.hash(token, tvfName);
     }
 
     @Override
     public int compareTo(PartitionState partitionState) {
-        if (!Objects.equals(partitionState.getToken(), token)) {
-            return token.compareTo(partitionState.getToken());
-        }
-        return state.compareTo(partitionState.state);
+        int keyComparison = getKey().compareTo(partitionState.getKey());
+        return keyComparison != 0 ? keyComparison : state.compareTo(partitionState.state);
     }
 
     @Override
