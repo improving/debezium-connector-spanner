@@ -6,6 +6,7 @@
 package io.debezium.connector.spanner.db.dao;
 
 import java.util.List;
+import java.util.Locale;
 
 import com.google.cloud.Timestamp;
 import com.google.cloud.spanner.DatabaseClient;
@@ -113,12 +114,10 @@ public class ChangeStreamDao {
     private String resolvePostgresTvfName(String tvfName) {
         if (tvfName == null || tvfName.isBlank()) {
             String prefix = isMutableKeyRange ? "read_proto_bytes_" : "read_json_";
-            return prefix + changeStreamName.toLowerCase();
+            return prefix + changeStreamName.toLowerCase(Locale.ROOT);
         }
 
-        String unquoted = tvfName.replace("\"", "");
-        int lastDot = unquoted.lastIndexOf('.');
-        return lastDot >= 0 ? unquoted.substring(lastDot + 1) : unquoted;
+        return PostgresIdentifier.routineName(tvfName);
     }
 
     private String escapePostgresIdentifier(String identifier) {

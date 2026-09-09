@@ -16,6 +16,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 
@@ -326,7 +327,7 @@ public class Connection {
 
     public List<String> readPlacementTvfNames(String changeStreamName) {
         String prefix = isPostgres()
-                ? "read_proto_bytes_" + changeStreamName.toLowerCase() + "_"
+                ? "read_proto_bytes_" + changeStreamName.toLowerCase(Locale.ROOT) + "_"
                 : "READ_" + changeStreamName + "_";
         String sql = "SELECT routine_name FROM information_schema.routines " +
                 "WHERE routine_type LIKE '%FUNCTION' AND routine_name LIKE " + (isPostgres() ? "$1" : "@prefix") +
@@ -338,7 +339,8 @@ public class Connection {
         List<String> names = new ArrayList<>();
         try (ResultSet resultSet = executeSelect(statement)) {
             while (resultSet.next()) {
-                names.add(resultSet.getString("routine_name"));
+                String routineName = resultSet.getString("routine_name");
+                names.add(isPostgres() ? "\"spanner\".\"" + routineName.replace("\"", "\"\"") + "\"" : routineName);
             }
         }
         return names;

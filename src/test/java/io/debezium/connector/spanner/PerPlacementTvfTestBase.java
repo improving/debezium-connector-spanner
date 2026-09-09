@@ -139,7 +139,7 @@ public class PerPlacementTvfTestBase extends AbstractSpannerConnectorIT {
 
     private static String tvfForPlacement(List<String> tvfNames, String placement) {
         return tvfNames.stream()
-                .filter(name -> name.toLowerCase(Locale.ROOT)
+                .filter(name -> name.replace("\"", "").toLowerCase(Locale.ROOT)
                         .endsWith("_" + placement.toLowerCase(Locale.ROOT)))
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("No generated TVF for placement " + placement + ": " + tvfNames));

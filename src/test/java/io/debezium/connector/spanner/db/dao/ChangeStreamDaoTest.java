@@ -63,6 +63,34 @@ class ChangeStreamDaoTest {
     }
 
     @Test
+    void testPostgresStreamQueryFoldsUnquotedPlacementTvfNameToLowercase() {
+        ReadContext readContext = readContext();
+        DatabaseClient databaseClient = postgresDatabaseClient(readContext);
+        ChangeStreamDao changeStreamDao = new ChangeStreamDao("ChangeStream", true,
+                List.of("READ_PROTO_BYTES_CHANGESTREAM_US"), databaseClient, Options.RpcPriority.LOW, "Job Name");
+
+        changeStreamDao.streamQuery("token", "READ_PROTO_BYTES_CHANGESTREAM_US",
+                Timestamp.ofTimeMicroseconds(1L), Timestamp.ofTimeMicroseconds(2L), 1L);
+
+        assertEquals("SELECT * FROM \"spanner\".\"read_proto_bytes_changestream_us\"($1, $2, $3, $4, null)",
+                executedStatement(readContext).getSql());
+    }
+
+    @Test
+    void testPostgresStreamQueryPreservesQuotedPlacementTvfNameCase() {
+        ReadContext readContext = readContext();
+        DatabaseClient databaseClient = postgresDatabaseClient(readContext);
+        ChangeStreamDao changeStreamDao = new ChangeStreamDao("ChangeStream", true,
+                List.of("\"spanner\".\"Read_Proto_Bytes_ChangeStream_US\""), databaseClient, Options.RpcPriority.LOW, "Job Name");
+
+        changeStreamDao.streamQuery("token", "\"spanner\".\"Read_Proto_Bytes_ChangeStream_US\"",
+                Timestamp.ofTimeMicroseconds(1L), Timestamp.ofTimeMicroseconds(2L), 1L);
+
+        assertEquals("SELECT * FROM \"spanner\".\"Read_Proto_Bytes_ChangeStream_US\"($1, $2, $3, $4, null)",
+                executedStatement(readContext).getSql());
+    }
+
+    @Test
     void testPostgresStreamQueryAcceptsSchemaQualifiedPlacementTvfName() {
         ReadContext readContext = readContext();
         DatabaseClient databaseClient = postgresDatabaseClient(readContext);

@@ -8,6 +8,7 @@ package io.debezium.connector.spanner.db.dao;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -154,7 +155,7 @@ public class SchemaDao {
         String expectedPrefix = expectedTvfPrefix(streamName);
 
         for (String tvfName : placementTvfNames) {
-            String bareName = isPostgres() ? stripPostgresQuoting(tvfName) : tvfName;
+            String bareName = isPostgres() ? PostgresIdentifier.routineName(tvfName) : tvfName;
             if (!existingRoutineNames.contains(bareName)) {
                 throw new IllegalArgumentException("Configured placement TVF '" + tvfName
                         + "' was not found among the database's routines: " + existingRoutineNames);
@@ -175,20 +176,14 @@ public class SchemaDao {
     private String expectedTvfPrefix(String streamName) {
         if (isPostgres()) {
             String base = isMutableKeyRangeChangeStream(streamName) ? "read_proto_bytes_" : "read_json_";
-            return (base + streamName).toLowerCase();
+            return (base + streamName).toLowerCase(Locale.ROOT);
         }
         return "READ_" + streamName;
     }
 
     private boolean isAssociatedWithChangeStream(String bareTvfName, String expectedPrefix) {
-        String candidate = isPostgres() ? bareTvfName.toLowerCase() : bareTvfName;
+        String candidate = isPostgres() ? bareTvfName.toLowerCase(Locale.ROOT) : bareTvfName;
         return candidate.equals(expectedPrefix) || candidate.startsWith(expectedPrefix + "_");
-    }
-
-    private String stripPostgresQuoting(String tvfName) {
-        String unquoted = tvfName.replace("\"", "");
-        int lastDot = unquoted.lastIndexOf('.');
-        return lastDot >= 0 ? unquoted.substring(lastDot + 1) : unquoted;
     }
 
     /**
@@ -209,7 +204,7 @@ public class SchemaDao {
 
     private Statement buildRoutineExistenceStatement(List<String> tvfNames) {
         StringBuilder sql = new StringBuilder(
-                "SELECT routine_name FROM information_schema.routines WHERE routine_type LIKE '%FUNCTION' AND routine_name IN (");
+                "SELECT routine_name FROM information_schema.routines WHERE UPPER(routine_type) LIKE '%FUNCTION' AND routine_name IN (");
         for (int i = 0; i < tvfNames.size(); i++) {
             sql.append(isPostgres() ? "$" + (i + 1) : "@p" + i);
             if (i < tvfNames.size() - 1) {
@@ -220,7 +215,7 @@ public class SchemaDao {
 
         Statement.Builder builder = Statement.newBuilder(sql.toString());
         for (int i = 0; i < tvfNames.size(); i++) {
-            String bareName = isPostgres() ? stripPostgresQuoting(tvfNames.get(i)) : tvfNames.get(i);
+            String bareName = isPostgres() ? PostgresIdentifier.routineName(tvfNames.get(i)) : tvfNames.get(i);
             builder.bind(isPostgres() ? "p" + (i + 1) : "p" + i).to(bareName);
         }
         return builder.build();
@@ -382,6 +377,6 @@ public class SchemaDao {
      * match what's actually stored in {@code information_schema} before it's used in a lookup.
      */
     private String normalizeIdentifier(String identifier) {
-        return isPostgres() ? identifier.toLowerCase() : identifier;
+        return isPostgres() ? identifier.toLowerCase(Locale.ROOT) : identifier;
     }
 }

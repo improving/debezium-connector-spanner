@@ -169,7 +169,7 @@ class SchemaDaoTest {
     }
 
     @Test
-    void testValidatePlacementTvfNamesPostgresSuccessWithQuoting() throws SpannerException {
+    void testValidatePlacementTvfNamesPostgresFoldsUnquotedNameToLowercase() throws SpannerException {
         DatabaseClient databaseClient = mock(DatabaseClient.class);
         when(databaseClient.getDialect()).thenReturn(Dialect.POSTGRESQL);
         ReadOnlyTransaction readOnlyTransaction = mock(ReadOnlyTransaction.class);
@@ -194,7 +194,36 @@ class SchemaDaoTest {
 
         SchemaDao schemaDao = new SchemaDao(databaseClient);
         assertDoesNotThrow(() -> schemaDao.validatePlacementTvfNames("foo",
-                List.of("\"spanner\".\"read_proto_bytes_foo_us\"")));
+                List.of("READ_PROTO_BYTES_FOO_US")));
+    }
+
+    @Test
+    void testValidatePlacementTvfNamesPostgresSuccessWithQuoting() throws SpannerException {
+        DatabaseClient databaseClient = mock(DatabaseClient.class);
+        when(databaseClient.getDialect()).thenReturn(Dialect.POSTGRESQL);
+        ReadOnlyTransaction readOnlyTransaction = mock(ReadOnlyTransaction.class);
+        when(databaseClient.readOnlyTransaction()).thenReturn(readOnlyTransaction);
+
+        ResultSet optionsResultSet = mock(ResultSet.class);
+        when(optionsResultSet.next()).thenReturn(true, false);
+        when(optionsResultSet.getString(0)).thenReturn("per_placement_tvf");
+        when(optionsResultSet.getString(1)).thenReturn("true");
+
+        ResultSet routinesResultSet = mock(ResultSet.class);
+        when(routinesResultSet.next()).thenReturn(true, false);
+        when(routinesResultSet.getString(0)).thenReturn("Read_Proto_Bytes_Foo_US");
+
+        ResultSet mutableOptionsResultSet = mock(ResultSet.class);
+        when(mutableOptionsResultSet.next()).thenReturn(true, false);
+        when(mutableOptionsResultSet.getString(0)).thenReturn("partition_mode");
+        when(mutableOptionsResultSet.getString(1)).thenReturn("MUTABLE_KEY_RANGE");
+
+        when(readOnlyTransaction.executeQuery(any()))
+                .thenReturn(optionsResultSet, routinesResultSet, mutableOptionsResultSet);
+
+        SchemaDao schemaDao = new SchemaDao(databaseClient);
+        assertDoesNotThrow(() -> schemaDao.validatePlacementTvfNames("foo",
+                List.of("\"spanner\".\"Read_Proto_Bytes_Foo_US\"")));
     }
 
     @Test
