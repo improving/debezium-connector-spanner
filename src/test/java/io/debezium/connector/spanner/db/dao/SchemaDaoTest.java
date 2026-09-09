@@ -15,6 +15,7 @@ import static org.mockito.Mockito.anyInt;
 import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -176,25 +177,20 @@ class SchemaDaoTest {
         when(databaseClient.readOnlyTransaction()).thenReturn(readOnlyTransaction);
 
         ResultSet optionsResultSet = mock(ResultSet.class);
-        when(optionsResultSet.next()).thenReturn(true, false);
-        when(optionsResultSet.getString(0)).thenReturn("per_placement_tvf");
-        when(optionsResultSet.getString(1)).thenReturn("true");
+        when(optionsResultSet.next()).thenReturn(true, true, false);
+        when(optionsResultSet.getString(0)).thenReturn("per_placement_tvf", "partition_mode");
+        when(optionsResultSet.getString(1)).thenReturn("true", "MUTABLE_KEY_RANGE");
 
         ResultSet routinesResultSet = mock(ResultSet.class);
         when(routinesResultSet.next()).thenReturn(true, false);
         when(routinesResultSet.getString(0)).thenReturn("read_proto_bytes_foo_us");
 
-        ResultSet mutableOptionsResultSet = mock(ResultSet.class);
-        when(mutableOptionsResultSet.next()).thenReturn(true, false);
-        when(mutableOptionsResultSet.getString(0)).thenReturn("partition_mode");
-        when(mutableOptionsResultSet.getString(1)).thenReturn("MUTABLE_KEY_RANGE");
-
-        when(readOnlyTransaction.executeQuery(any()))
-                .thenReturn(optionsResultSet, routinesResultSet, mutableOptionsResultSet);
+        when(readOnlyTransaction.executeQuery(any())).thenReturn(optionsResultSet, routinesResultSet);
 
         SchemaDao schemaDao = new SchemaDao(databaseClient);
         assertDoesNotThrow(() -> schemaDao.validatePlacementTvfNames("foo",
                 List.of("READ_PROTO_BYTES_FOO_US")));
+        verify(readOnlyTransaction, times(2)).executeQuery(any());
     }
 
     @Test
@@ -205,21 +201,15 @@ class SchemaDaoTest {
         when(databaseClient.readOnlyTransaction()).thenReturn(readOnlyTransaction);
 
         ResultSet optionsResultSet = mock(ResultSet.class);
-        when(optionsResultSet.next()).thenReturn(true, false);
-        when(optionsResultSet.getString(0)).thenReturn("per_placement_tvf");
-        when(optionsResultSet.getString(1)).thenReturn("true");
+        when(optionsResultSet.next()).thenReturn(true, true, false);
+        when(optionsResultSet.getString(0)).thenReturn("per_placement_tvf", "partition_mode");
+        when(optionsResultSet.getString(1)).thenReturn("true", "MUTABLE_KEY_RANGE");
 
         ResultSet routinesResultSet = mock(ResultSet.class);
         when(routinesResultSet.next()).thenReturn(true, false);
         when(routinesResultSet.getString(0)).thenReturn("Read_Proto_Bytes_Foo_US");
 
-        ResultSet mutableOptionsResultSet = mock(ResultSet.class);
-        when(mutableOptionsResultSet.next()).thenReturn(true, false);
-        when(mutableOptionsResultSet.getString(0)).thenReturn("partition_mode");
-        when(mutableOptionsResultSet.getString(1)).thenReturn("MUTABLE_KEY_RANGE");
-
-        when(readOnlyTransaction.executeQuery(any()))
-                .thenReturn(optionsResultSet, routinesResultSet, mutableOptionsResultSet);
+        when(readOnlyTransaction.executeQuery(any())).thenReturn(optionsResultSet, routinesResultSet);
 
         SchemaDao schemaDao = new SchemaDao(databaseClient);
         assertDoesNotThrow(() -> schemaDao.validatePlacementTvfNames("foo",

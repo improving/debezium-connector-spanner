@@ -7,7 +7,6 @@ package io.debezium.connector.spanner.db;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
@@ -23,6 +22,7 @@ import com.google.cloud.spanner.Options;
 
 import io.debezium.connector.spanner.db.dao.ChangeStreamDao;
 import io.debezium.connector.spanner.db.dao.SchemaDao;
+import io.debezium.connector.spanner.db.model.ChangeStreamOptions;
 
 class DaoFactoryTest {
 
@@ -38,7 +38,7 @@ class DaoFactoryTest {
     void testGetStreamDao() {
         DatabaseClientFactory databaseClientFactory = mock(DatabaseClientFactory.class);
         SchemaDao mockSchema = mock(SchemaDao.class);
-        when(mockSchema.isMutableKeyRangeChangeStream(any())).thenReturn(true);
+        when(mockSchema.getChangeStreamOptions("")).thenReturn(new ChangeStreamOptions(true, false));
 
         // use a spy so we can stub getSchemaDao() to return our mockSchema
         DaoFactory daoFactory = spy(new DaoFactory(databaseClientFactory));
@@ -50,14 +50,15 @@ class DaoFactoryTest {
 
         ChangeStreamDao actualStreamDao = daoFactory.getStreamDao(changeStreamName, rpcPriority, jobName);
         assertNotNull(actualStreamDao);
-        verify(mockSchema, times(1)).isMutableKeyRangeChangeStream(changeStreamName);
+        verify(mockSchema, times(1)).getChangeStreamOptions(changeStreamName);
     }
 
     @Test
     void testGetStreamDaoWithPlacementTvfNamesValidatesAgainstSchema() {
         DatabaseClientFactory databaseClientFactory = mock(DatabaseClientFactory.class);
         SchemaDao mockSchema = mock(SchemaDao.class);
-        when(mockSchema.isMutableKeyRangeChangeStream(any())).thenReturn(true);
+        ChangeStreamOptions streamOptions = new ChangeStreamOptions(true, true);
+        when(mockSchema.getChangeStreamOptions("Foo")).thenReturn(streamOptions);
 
         DaoFactory daoFactory = spy(new DaoFactory(databaseClientFactory));
         doReturn(mockSchema).when(daoFactory).getSchemaDao();
@@ -70,14 +71,14 @@ class DaoFactoryTest {
         ChangeStreamDao actualStreamDao = daoFactory.getStreamDao(changeStreamName, placementTvfNames, rpcPriority, jobName);
 
         assertNotNull(actualStreamDao);
-        verify(mockSchema, times(1)).validatePlacementTvfNames(changeStreamName, placementTvfNames);
+        verify(mockSchema, times(1)).validatePlacementTvfNames(changeStreamName, placementTvfNames, streamOptions);
     }
 
     @Test
     void testGetStreamDaoWithPlacementTvfNamesFailsWhenNotMutableKeyRange() {
         DatabaseClientFactory databaseClientFactory = mock(DatabaseClientFactory.class);
         SchemaDao mockSchema = mock(SchemaDao.class);
-        when(mockSchema.isMutableKeyRangeChangeStream(any())).thenReturn(false);
+        when(mockSchema.getChangeStreamOptions("Foo")).thenReturn(new ChangeStreamOptions(false, true));
 
         DaoFactory daoFactory = spy(new DaoFactory(databaseClientFactory));
         doReturn(mockSchema).when(daoFactory).getSchemaDao();

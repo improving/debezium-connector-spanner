@@ -20,6 +20,7 @@ import com.google.cloud.spanner.ResultSet;
 import com.google.cloud.spanner.Statement;
 import com.google.cloud.spanner.TimestampBound;
 
+import io.debezium.connector.spanner.db.model.ChangeStreamOptions;
 import io.debezium.connector.spanner.db.model.schema.ChangeStreamSchema;
 import io.debezium.connector.spanner.db.model.schema.SpannerSchema;
 
@@ -88,34 +89,32 @@ public class SchemaDao {
         return exist ? builder.build() : null;
     }
 
-    public boolean isMutableKeyRangeChangeStream(String streamName) {
+    public ChangeStreamOptions getChangeStreamOptions(String streamName) {
+        boolean mutableKeyRange = false;
+        boolean perPlacementTvf = false;
         try (ReadOnlyTransaction tx = databaseClient.readOnlyTransaction()) {
             ResultSet resultSet = readChangeStreamOptions(tx, streamName);
 
             while (resultSet.next()) {
                 String optionName = resultSet.getString(0);
+                String optionValue = resultSet.getString(1);
                 if ("partition_mode".equalsIgnoreCase(optionName)) {
-                    String optionValue = resultSet.getString(1);
-                    return "MUTABLE_KEY_RANGE".equalsIgnoreCase(optionValue);
+                    mutableKeyRange = "MUTABLE_KEY_RANGE".equalsIgnoreCase(optionValue);
+                }
+                else if ("per_placement_tvf".equalsIgnoreCase(optionName)) {
+                    perPlacementTvf = Boolean.parseBoolean(optionValue);
                 }
             }
         }
-        return false;
+        return new ChangeStreamOptions(mutableKeyRange, perPlacementTvf);
+    }
+
+    public boolean isMutableKeyRangeChangeStream(String streamName) {
+        return getChangeStreamOptions(streamName).isMutableKeyRange();
     }
 
     public boolean isPerPlacementTvfChangeStream(String streamName) {
-        try (ReadOnlyTransaction tx = databaseClient.readOnlyTransaction()) {
-            ResultSet resultSet = readChangeStreamOptions(tx, streamName);
-
-            while (resultSet.next()) {
-                String optionName = resultSet.getString(0);
-                if ("per_placement_tvf".equalsIgnoreCase(optionName)) {
-                    String optionValue = resultSet.getString(1);
-                    return Boolean.parseBoolean(optionValue);
-                }
-            }
-        }
-        return false;
+        return getChangeStreamOptions(streamName).isPerPlacementTvf();
     }
 
     /**
@@ -144,15 +143,22 @@ public class SchemaDao {
         if (placementTvfNames == null || placementTvfNames.isEmpty()) {
             return;
         }
+        validatePlacementTvfNames(streamName, placementTvfNames, getChangeStreamOptions(streamName));
+    }
 
-        if (!isPerPlacementTvfChangeStream(streamName)) {
+    public void validatePlacementTvfNames(String streamName, List<String> placementTvfNames, ChangeStreamOptions options) {
+        if (placementTvfNames == null || placementTvfNames.isEmpty()) {
+            return;
+        }
+
+        if (!options.isPerPlacementTvf()) {
             throw new IllegalArgumentException("Configured placement TVF names " + placementTvfNames
                     + " for change stream '" + streamName + "', but this change stream does not have "
                     + "the 'per_placement_tvf' option enabled.");
         }
 
         Set<String> existingRoutineNames = readExistingRoutineNames(placementTvfNames);
-        String expectedPrefix = expectedTvfPrefix(streamName);
+        String expectedPrefix = expectedTvfPrefix(streamName, options.isMutableKeyRange());
 
         for (String tvfName : placementTvfNames) {
             String bareName = isPostgres() ? PostgresIdentifier.routineName(tvfName) : tvfName;
@@ -173,9 +179,9 @@ public class SchemaDao {
      * naming convention used to build the default TVF name in
      * {@link ChangeStreamDao#streamQuery(String, String, Timestamp, Timestamp, long)}.
      */
-    private String expectedTvfPrefix(String streamName) {
+    private String expectedTvfPrefix(String streamName, boolean mutableKeyRange) {
         if (isPostgres()) {
-            String base = isMutableKeyRangeChangeStream(streamName) ? "read_proto_bytes_" : "read_json_";
+            String base = mutableKeyRange ? "read_proto_bytes_" : "read_json_";
             return (base + streamName).toLowerCase(Locale.ROOT);
         }
         return "READ_" + streamName;
