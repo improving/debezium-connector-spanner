@@ -95,23 +95,26 @@ public class LowWatermarkCalculator {
 
         allPartitions.putAll(sharedPartitions);
 
-        if (allPartitions.containsKey(InitialPartition.PARTITION_TOKEN)) {
+        List<PartitionState> initialPartitions = allPartitions.values().stream()
+                .filter(partitionState -> InitialPartition.isInitialPartition(partitionState.getToken()))
+                .collect(Collectors.toList());
+        if (!initialPartitions.isEmpty()) {
             final long now = new Date().getTime();
-            long lag = now
-                    - allPartitions
-                            .get(InitialPartition.PARTITION_TOKEN)
-                            .getStartTimestamp()
-                            .toDate()
-                            .getTime();
             long acceptedLag = spannerConnectorConfig.getHeartbeatInterval().toMillis() + OFFSET_MONITORING_LAG_MAX_MS;
-            if (lag > acceptedLag) {
-                LOGGER.warn(
-                        "task: {}, Partition has a very old start timestamp, lag: {}, token: {}",
-                        taskSyncContextHolder.get().getTaskUid(),
-                        lag,
-                        InitialPartition.PARTITION_TOKEN);
+            for (PartitionState partitionState : initialPartitions) {
+                long lag = now - partitionState.getStartTimestamp().toDate().getTime();
+                if (lag > acceptedLag) {
+                    LOGGER.warn(
+                            "task: {}, Partition has a very old start timestamp, lag: {}, partition: {}",
+                            taskSyncContextHolder.get().getTaskUid(),
+                            lag,
+                            partitionState.getKey());
+                }
             }
-            return allPartitions.get(InitialPartition.PARTITION_TOKEN).getStartTimestamp();
+            return initialPartitions.stream()
+                    .map(PartitionState::getStartTimestamp)
+                    .min(Timestamp::compareTo)
+                    .orElse(null);
         }
 
         Map<PartitionKey, Timestamp> offsets;
