@@ -5,6 +5,8 @@
  */
 package io.debezium.connector.spanner;
 
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 
@@ -37,10 +39,12 @@ public class SpannerPartition implements Partition {
 
     @Override
     public Map<String, String> getSourcePartition() {
-        if (tvfName == null || tvfName.isBlank()) {
-            return Map.of(PARTITION_TOKEN_KEY, partitionToken);
+        Map<String, String> sourcePartition = new LinkedHashMap<>();
+        sourcePartition.put(PARTITION_TOKEN_KEY, partitionToken);
+        if (tvfName != null && !tvfName.isBlank()) {
+            sourcePartition.put(TVF_NAME_KEY, tvfName);
         }
-        return Map.of(PARTITION_TOKEN_KEY, partitionToken, TVF_NAME_KEY, tvfName);
+        return Collections.unmodifiableMap(sourcePartition);
     }
 
     public String toString() {

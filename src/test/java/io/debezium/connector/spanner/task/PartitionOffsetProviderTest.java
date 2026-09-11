@@ -124,6 +124,28 @@ class PartitionOffsetProviderTest {
     }
 
     @Test
+    void testGetOffsetsSupportsMixedNullAndNamedTvfPartitions() {
+        OffsetStorageReader reader = mock(OffsetStorageReader.class);
+        MetricsEventPublisher metricsPublisher = new MetricsEventPublisher();
+
+        PartitionState mutableWithoutTvf = partitionState("shared-token", null);
+        PartitionState mutableWithTvf = partitionState("shared-token", "tvfA");
+        Timestamp offsetWithoutTvf = Timestamp.parseTimestamp("2026-01-01T00:05:00Z");
+        Timestamp offsetWithTvf = Timestamp.parseTimestamp("2026-01-01T00:10:00Z");
+        Map<Map<String, String>, Map<String, Object>> offsets = new HashMap<>();
+        offsets.put(Map.of("partitionToken", "shared-token"), Map.of("offset", offsetWithoutTvf.toString()));
+        offsets.put(Map.of("partitionToken", "shared-token", "tvfName", "tvfA"), Map.of("offset", offsetWithTvf.toString()));
+        when(reader.offsets(any())).thenAnswer(invocation -> offsets);
+
+        PartitionOffsetProvider provider = new PartitionOffsetProvider(reader, metricsPublisher, 30000L);
+        Map<PartitionKey, Timestamp> result = provider.getOffsets(List.of(mutableWithoutTvf, mutableWithTvf));
+
+        assertEquals(2, result.size());
+        assertEquals(offsetWithoutTvf, result.get(mutableWithoutTvf.getKey()));
+        assertEquals(offsetWithTvf, result.get(mutableWithTvf.getKey()));
+    }
+
+    @Test
     void testGetOffsetUsesTvfNameForSourcePartitionKey() {
         OffsetStorageReader reader = mock(OffsetStorageReader.class);
         MetricsEventPublisher metricsPublisher = new MetricsEventPublisher();

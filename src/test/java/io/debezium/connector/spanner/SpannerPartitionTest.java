@@ -8,8 +8,11 @@ package io.debezium.connector.spanner;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.Test;
@@ -33,18 +36,37 @@ class SpannerPartitionTest {
     }
 
     @Test
-    void testGetSourcePartition() {
-        Map<String, String> actualSourcePartition = SpannerPartition.getInitialSpannerPartition().getSourcePartition();
-        assertEquals(1, actualSourcePartition.size());
-        assertEquals("Parent0", actualSourcePartition.get("partitionToken"));
+    void immutableKeyRangeUsesTokenOnlySourcePartition() {
+        Map<String, String> sourcePartition = SpannerPartition.getInitialSpannerPartition().getSourcePartition();
+
+        assertEquals(Map.of("partitionToken", "Parent0"), sourcePartition);
+        assertEquals(List.of("partitionToken"), new ArrayList<>(sourcePartition.keySet()));
+        assertThrows(UnsupportedOperationException.class, () -> sourcePartition.put("tvfName", "tvfA"));
     }
 
     @Test
-    void testGetSourcePartitionWithTvfName() {
-        Map<String, String> actualSourcePartition = new SpannerPartition("token", "tvfA").getSourcePartition();
-        assertEquals(2, actualSourcePartition.size());
-        assertEquals("token", actualSourcePartition.get("partitionToken"));
-        assertEquals("tvfA", actualSourcePartition.get("tvfName"));
+    void mutableKeyRangeWithoutPlacementTvfsUsesTokenOnlySourcePartition() {
+        Map<String, String> sourcePartition = new SpannerPartition("token", null).getSourcePartition();
+
+        assertEquals(Map.of("partitionToken", "token"), sourcePartition);
+        assertEquals(List.of("partitionToken"), new ArrayList<>(sourcePartition.keySet()));
+    }
+
+    @Test
+    void blankTvfNameUsesTokenOnlySourcePartition() {
+        Map<String, String> sourcePartition = new SpannerPartition("token", "  ").getSourcePartition();
+
+        assertEquals(Map.of("partitionToken", "token"), sourcePartition);
+        assertEquals(List.of("partitionToken"), new ArrayList<>(sourcePartition.keySet()));
+    }
+
+    @Test
+    void mutableKeyRangeWithPlacementTvfUsesOrderedCompositeSourcePartition() {
+        Map<String, String> sourcePartition = new SpannerPartition("token", "tvfA").getSourcePartition();
+
+        assertEquals(Map.of("partitionToken", "token", "tvfName", "tvfA"), sourcePartition);
+        assertEquals(List.of("partitionToken", "tvfName"), new ArrayList<>(sourcePartition.keySet()));
+        assertThrows(UnsupportedOperationException.class, () -> sourcePartition.put("other", "value"));
     }
 
     @Test
