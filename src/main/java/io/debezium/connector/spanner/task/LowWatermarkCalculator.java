@@ -53,11 +53,15 @@ public class LowWatermarkCalculator {
             return null;
         }
 
+        boolean placementTvfsConfigured = !spannerConnectorConfig.placementTvfNames().isEmpty();
+
         Map<PartitionKey, List<PartitionState>> partitionsMap = taskSyncContext.getAllTaskStates().values().stream()
                 .flatMap(taskState -> taskState.getPartitions().stream())
                 .filter(
                         partitionState -> !partitionState.getState().equals(PartitionStateEnum.FINISHED)
                                 && !partitionState.getState().equals(PartitionStateEnum.REMOVED))
+                .filter(partitionState -> !placementTvfsConfigured
+                        || partitionState.getTvfName() != null && !partitionState.getTvfName().isBlank())
                 .collect(Collectors.groupingBy(PartitionState::getKey));
 
         Set<PartitionKey> duplicatesInPartitions = checkDuplication(partitionsMap);
@@ -74,6 +78,11 @@ public class LowWatermarkCalculator {
 
         Map<PartitionKey, List<PartitionState>> sharedPartitionsMap = taskSyncContext.getAllTaskStates().values().stream()
                 .flatMap(taskState -> taskState.getSharedPartitions().stream())
+                .filter(
+                        partitionState -> !partitionState.getState().equals(PartitionStateEnum.FINISHED)
+                                && !partitionState.getState().equals(PartitionStateEnum.REMOVED))
+                .filter(partitionState -> !placementTvfsConfigured
+                        || partitionState.getTvfName() != null && !partitionState.getTvfName().isBlank())
                 .filter(partitionState -> !partitions.containsKey(partitionState.getKey()))
                 .collect(Collectors.groupingBy(PartitionState::getKey));
 
